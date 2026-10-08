@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LMT Places Simulator · Sutherland × Tripadvisor</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="confetti"></canvas>
+<div id="toast"></div>
+
+<!-- ============================ LOGIN ============================ -->
+<section id="v-login" class="view active">
+  <div class="login-card">
+    <div class="brand-row">
+      <div class="brand-tile">LT</div>
+      <div>
+        <h1>Places Training · LMT Simulator</h1>
+        <div class="sub">Location Tool Listing Assessment · Sutherland · Tripadvisor</div>
+        <span class="pill">HANDS-ON LISTING ASSESSMENT</span>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="fld">
+        <label>Training ID <span class="req">*</span></label>
+        <input id="inTid" placeholder="e.g. 102345" inputmode="numeric" maxlength="12" autocomplete="off">
+        <div class="err-msg" id="errTid"></div>
+      </div>
+      <div class="fld">
+        <label>Display Name <span class="req">*</span></label>
+        <input id="inName" placeholder="e.g. Jack Sparrow" maxlength="60" autocomplete="off">
+        <div class="err-msg" id="errName"></div>
+      </div>
+      <div class="fld">
+        <label>Country <span class="req">*</span></label>
+        <select id="inCountry"><option value="">— Select country —</option></select>
+      </div>
+      <div class="fld">
+        <label>Trainer Name <span class="req">*</span></label>
+        <select id="inTrainer"><option value="">— Select trainer —</option></select>
+      </div>
+    </div>
+
+    <div class="fld" style="margin-top:16px">
+      <label>Wave Code <span class="opt">(optional)</span></label>
+      <select id="inWave"><option value="">— No wave —</option></select>
+    </div>
+
+    <div class="or-row">
+      <div class="fld locked" id="dayFld">
+        <label>Select Training Day <span class="opt" id="dayLockTxt">(locked)</span></label>
+        <select id="inDay" disabled><option value="">— Select day —</option></select>
+      </div>
+      <div class="or-chip">OR</div>
+      <div class="fld">
+        <label>Trainer Session</label>
+        <select id="inSession"><option value="">— Select session —</option></select>
+      </div>
+    </div>
+
+    <button class="btn-launch" id="btnLaunch" disabled>Launch Assessment →</button>
+
+    <div class="divider">TRAINER TOOLS</div>
+    <button class="btn-admin" id="btnAdmin">🔐 Admin Portal Access</button>
+
+    <div class="conn">
+      <span id="connState"><span class="dot off"></span>Checking connection…</span>
+      <span id="pendingState"></span>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ GUIDE ============================ -->
+<section id="v-guide" class="view">
+  <div class="guide-wrap" id="guideWrap"></div>
+</section>
+
+<!-- ============================ GAME (LMT replica) ============================ -->
+<section id="v-game" class="view">
+  <div class="hud" id="hud">
+    <span class="day" id="hudDay">DAY 1</span>
+    <span class="stat">Case <span id="hudCase">1</span>/<span id="hudTotal">10</span></span>
+    <span class="qdots" id="hudDots"></span>
+    <span class="stat">⏱ <span id="hudTimer">00:00</span></span>
+    <span class="stat">⭐ <span id="hudXp">0</span> <small>XP</small></span>
+    <span class="xpbar"><b id="hudXpBar"></b></span>
+    <span class="stat" id="hudLevel">Lv 1</span>
+    <span class="stat streak" id="hudStreak">🔥 0</span>
+    <span class="sp"></span>
+    <button id="hudExit">Exit</button>
+  </div>
+
+  <div class="lmt-top">
+    <div class="lmt-logo"><span class="o">LT</span><b>Location Tool</b><span class="tr">TRAINING</span></div>
+    <div class="lmt-nav">
+      <span data-nav="search">Search</span><span data-nav="process">Process</span><span data-nav="import">Import</span><span data-nav="manage">Manage</span><span data-nav="report">Report</span>
+    </div>
+    <input class="lmt-search" id="topSearch" placeholder="Search">
+    <span class="lmt-user" id="lmtUser">trainee</span>
+  </div>
+
+  <div class="beige">
+    <div class="audit-btns">
+      <button data-audit="basic">AuditTrail Basic View</button>
+      <button data-audit="full">AuditTrail Full View</button>
+      <button data-audit="owners">Owners</button>
+    </div>
+    <button class="hist" data-audit="full">⤢ History</button>
+  </div>
+
+  <div class="lmt-body">
+    <aside class="lmt-left">
+      <div class="lmt-left-in">
+        <div class="kv"><b>Request:</b> <span id="lReq"></span></div>
+        <div class="kv"><b>Feed:</b> <span id="lFeed">Hopper</span></div>
+        <button class="btn-help" id="btnHelpful">Helpful Links ▾</button>
+        <div id="helpfulMenu" class="helpful hidden">
+          <div data-link="google">🔍 Google search</div>
+          <div data-link="maps">🗺️ Google Maps</div>
+          <div data-link="ta">🦉 Tripadvisor search</div>
+          <div data-link="fb">📘 Facebook search</div>
+          <div data-link="ig">📸 Instagram (via Google)</div>
+          <div data-link="provider">🏷️ Provider page</div>
+        </div>
+        <button class="btn-nomatch" id="btnNoMatch">No Match Exists</button>
+        <div class="hf-row"><button id="btnHideFields">👁 Hide Fields</button><button id="btnApplyAll">⇪ Apply all</button></div>
+        <div class="showing">Showing:</div>
+        <input class="showlang" placeholder="Show languages" id="showLang">
+        <div class="navlist" id="navList"></div>
+      </div>
+    </aside>
+
+    <main class="lmt-main">
+      <div class="colhead"><div>Field</div><div>Requested Change</div><div>Action</div><div></div><div>Locks</div><div>Attribution</div></div>
+      <div id="casePane"></div>
+      <div class="endbar">
+        <span class="info" id="endInfo"></span>
+        <button class="btn btn-pri" id="btnTakeAction">Take Action ▶</button>
+      </div>
+    </main>
+  </div>
+
+  <div class="lmt-bottom">
+    <button class="lbtn" data-lb="L" title="Location summary">L</button>
+    <button class="lbtn" data-lb="B" title="Basic Info">B</button>
+    <button class="lbtn dark" data-lb="C" title="Contact Details">C</button>
+    <button class="lbtn" data-lb="LN" title="Location Notes">LN</button>
+    <span class="sp"></span>
+    <label><input type="checkbox" id="noEmail">No Email</label>
+    <button class="abtn" style="background:#1f7a3a" data-act="approve">✔<span class="tt">Approve – Create New</span></button>
+    <button class="abtn" style="background:#d6322b" data-act="reject">⊗<span class="tt">Reject / Close</span></button>
+    <button class="abtn" style="background:#7b4fd6" data-act="escalate">⬆<span class="tt">Escalate (Tier 1 / Tier 2)</span></button>
+    <button class="abtn" style="background:#2a9fd6" data-act="defer">⏱<span class="tt">Defer – Keep In Progress</span></button>
+    <button class="abtn" style="background:#555" data-act="email">✉<span class="tt">Email the property owner</span></button>
+  </div>
+</section>
+
+<!-- ============================ RESULTS ============================ -->
+<section id="v-results" class="view">
+  <div class="res-wrap" id="resWrap"></div>
+</section>
+
+<!-- ============================ MODALS ============================ -->
+<div class="modal-bg" id="mDecision"><div class="modal" id="mDecisionBox"></div></div>
+<div class="modal-bg" id="mFeedback"><div class="modal wide" id="mFeedbackBox"></div></div>
+<div class="modal-bg" id="mParent"><div class="modal" id="mParentBox"></div></div>
+<div class="modal-bg" id="mAdmin"><div class="modal full" id="mAdminBox"></div></div>
+<div class="modal-bg" id="mGeneric"><div class="modal wide" id="mGenericBox"></div></div>
+
+<!-- Map library (optional – the simulator still works without it) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>if (!window.L) document.write('<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>');</script>
+<script src="data.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
