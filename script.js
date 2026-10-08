@@ -7,7 +7,7 @@ const APP_CONFIG = {
   // Paste your Google Apps Script URL (ends in /exec) between the quotes so every
   // agent PC saves to the Google Sheet. Leave '' to run offline (browser storage).
   // Trainers can also paste it in Admin Portal → Settings (saved per browser).
-  WEB_APP_URL: '',
+  WEB_APP_URL: 'https://script.google.com/macros/s/AKfycby4Wr2UNaJdaqBS852Fq5TQpi7ULn44LGOtWXKrk0GwS_Z11asCM0u4rCo5pMiVEysq/exec',
 
   PASS_MARK: 80,            // % average score needed to pass a day
   QUESTIONS_PER_DAY: 10,
