@@ -2,7 +2,7 @@
    LMT PLACES SIMULATOR — SETTINGS  (edit this block only)
    ===================================================================== */
 const APP_CONFIG = {
-  VERSION: '2.3',
+  VERSION: '2.4',
 
   // Paste your Google Apps Script URL (ends in /exec) between the quotes so every
   // agent PC saves to the Google Sheet. Leave '' to run offline (browser storage).
@@ -123,7 +123,7 @@ const dayMeta = d => DAY_META_BUILTIN[d] || { title: 'Custom Day ' + d, icon: '�
 const LEVELS = [[0, 'Trainee Mapper'], [600, 'Geo Scout'], [1500, 'Data Ranger'], [2700, 'Listing Pro'], [4000, 'Places Specialist'], [5200, 'LMT Master']];
 const REQ_SECTIONS = { basic: 'Basic Info', contact: 'Contact Details', accom: 'Accommodation Info', geo: 'Geo Coding' };
 /* Sections that stay hidden on every new request until the agent clicks "Show All Fields" (same as the live LMT) */
-const HIDDEN_SECTIONS = { desc: 'Description', internal: 'Internal', geo: 'Geo Coding' };
+const HIDDEN_SECTIONS = { desc: 'Description', internal: 'Internal' }; // Geo Coding (lat/long + map) is always visible
 /* Contact Details stays visible but shows only URL until "Show All Fields" (Phone, Fax, Email are hidden rows) */
 const HIDDEN_ROWS = ['phone', 'fax', 'email'];
 /* The feed NEVER pre-fills these — agents research them online (phone, email, URL) or from the
@@ -452,11 +452,11 @@ function showGuide() {
   </div>
 
   <div class="gsec"><h3><span class="n">1</span>The LMT request page — scroll from top to bottom</h3>
-    <div class="infobox" style="margin-top:0"><b>👁 First click on every request: Show All Fields</b> (left menu). Like the live LMT, each new request opens with <b>Phone, Fax and Email (Contact Details shows only URL), Description, Internal and Geo Coding hidden</b>. Fraud clues often sit in the Description — if you skip this step you will miss them.</div>
+    <div class="infobox" style="margin-top:0"><b>👁 First click on every request: Show All Fields</b> (left menu). Like the live LMT, each new request opens with <b>Phone, Fax and Email (Contact Details shows only URL), Description and Internal hidden</b>. Fraud clues often sit in the Description — if you skip this step you will miss them.</div>
     <div class="steps5">
-      <div class="s5"><i>👁</i><b>Show All Fields</b><p>Reveals Phone, Fax, Email, Description, Internal Comment and Geo Coding. Do it before anything else.</p></div>
+      <div class="s5"><i>👁</i><b>Show All Fields</b><p>Reveals Phone, Fax, Email, Description and the Internal Comment. Do it before anything else.</p></div>
       <div class="s5"><i>🔗</i><b>Possible match?</b><p>If LMT shows a <b>possible match</b>, compare it. Same property → <b>＋ Add name as alias</b> and edit what sources say is wrong. Different → <b>✔＋ Not match, create new</b>.</p></div>
-      <div class="s5"><i>🪪</i><b>Basic Info</b><p>Name, Brand, Street One/Two, Postal Code and <b>Parent</b> (search 🔍 any town or village and pick the most specific geo).</p></div>
+      <div class="s5"><i>🪪</i><b>Basic Info</b><p>Name, Brand, Street One/Two, Postal Code and <b>Parent</b> (type the town or village in the Parent box, click 🔍, pick the most specific geo).</p></div>
       <div class="s5"><i>🔗</i><b>Provider Link</b><p>Click <b>Open Provider Page in New Tab</b>. Read the <b>amenities</b> — they tell you the accommodation type.</p></div>
       <div class="s5"><i>📖</i><b>Contact &amp; Accommodation</b><p>The feed sends <b>no phone, email, URL or type</b>. Find them online and type them in.</p></div>
       <div class="s5"><i>🏷️</i><b>Internal &amp; Geo</b><p>Write an <b>Internal Comment</b> with your evidence. Fix the pin on the map or paste coordinates from Google Maps.</p></div>
@@ -760,7 +760,7 @@ function linkAsAlias() {
   if (!L) { updateEndInfo(); return toast('No possible match on this request. If Tripadvisor already has it, use Take Action → Add Name as Alias and paste the listing link.', 4200); }
   const keepNotes = cs.f.internal;
   if (cs.link === 'new') { const f = listingFields(c, L); f.internal = keepNotes; cs.f = f; cs.aliases = (L.aliases || []).map(a => ({ name: a, searchable: true })); }
-  cs.link = 'alias';
+  cs.link = 'alias'; cs.parentQ = null;
   if (c.feed.name && !cs.aliases.some(a => norm(a.name) === norm(c.feed.name))) cs.aliases.push({ name: c.feed.name, searchable: false });
   cs.applied = {}; rerenderKeepScroll();
   toast('＋ Request applied to the existing listing ' + L.id + ' — feed name added as alias. Edit any field your sources say is wrong, then ✔ Take Action.', 4200);
@@ -769,7 +769,7 @@ function linkAsNew() {
   const c = curCase(), cs = S.cs, L = listingFor(c);
   cs.pre = 'approve';
   if (L && cs.link !== 'new') { const keep = cs.f.internal; cs.f = blankFields(c); cs.f.internal = keep; cs.aliases = c.feed.name ? [{ name: c.feed.name, searchable: false }] : []; cs.applied = {}; }
-  cs.link = 'new'; rerenderKeepScroll();
+  cs.link = 'new'; cs.parentQ = null; rerenderKeepScroll();
   toast(L ? '✔＋ Not a match — the form is cleared for a NEW listing. Research every field from sources.' : 'Marked: no match exists on Tripadvisor → create new. Make sure you searched tripadvisor.com first!', 3800);
 }
 function matchBox() {
@@ -779,8 +779,8 @@ function matchBox() {
     alias: ['pm-alias', '✔ <b>Request applied to this listing.</b> The feed name was added as an alias. Edit any field your sources say is wrong, then ✔ Take Action.'],
     new: ['pm-new', '✖ <b>Marked as not a match</b> — you are creating a new listing. (Changed your mind? Click ＋ Add name as alias.)'] }[cs.link];
   return `<div class="pm-box ${st[0]}"><div class="pm-h">${ICO.link} Possible match on Tripadvisor</div>
-    <table class="pm-tbl"><thead><tr><th>Location ID</th><th>Name</th><th>Address</th><th>Parent</th><th>Type</th><th>Distance from request pin</th><th></th></tr></thead>
-    <tbody><tr><td><code>${esc(L.id)}</code></td><td><b>${esc(L.name || '')}</b></td><td>${esc([L.street, L.street2, L.postal].filter(Boolean).join(', '))}</td><td>${esc(geoLabel(L.parent))}</td><td>${esc(L.type || '—')}</td><td>${ds}</td>
+    <table class="pm-tbl"><thead><tr><th>Location ID</th><th>Name</th><th>Address</th><th>Parent</th><th>Type</th><th>Lat / Long</th><th>Distance from request pin</th><th></th></tr></thead>
+    <tbody><tr><td><code>${esc(L.id)}</code></td><td><b>${esc(L.name || '')}</b></td><td>${esc([L.street, L.street2, L.postal].filter(Boolean).join(', '))}</td><td>${esc(geoLabel(L.parent))}</td><td>${esc(L.type || '—')}</td><td style="white-space:nowrap">${esc(L.lat)}, ${esc(L.lng)}</td><td>${ds}</td>
     <td><a href="${esc(L.taUrl)}" target="_blank" rel="noopener">View on Tripadvisor ↗</a></td></tr></tbody></table>
     <div class="pm-note">${st[1]}</div></div>`;
 }
@@ -797,7 +797,7 @@ function applyFieldVisibility() {
   const on = !!(S.cs && S.cs.showAll);
   $('#casePane').classList.toggle('fields-hidden', !on);
   const b = $('#btnHideFields');
-  if (b) { b.innerHTML = on ? '<span class="eye">👁</span> Hide Fields' : '<span class="eye">👁</span> Show All Fields'; b.classList.toggle('on', on); b.title = on ? 'Hide fields again' : 'Show Phone, Fax, Email, Description, Internal and Geo Coding'; }
+  if (b) { b.innerHTML = on ? '<span class="eye">👁</span> Hide Fields' : '<span class="eye">👁</span> Show All Fields'; b.classList.toggle('on', on); b.title = on ? 'Hide fields again' : 'Show Phone, Fax, Email, Description and Internal'; }
   $$('#navList [data-jump]').forEach(d => { const k = (d.dataset.jump || '').replace('sec-', ''); d.classList.toggle('hid', !on && !!HIDDEN_SECTIONS[k]); });
   if (on) setTimeout(() => { if (S.map) { S.map.invalidateSize(); if (S.marker) S.map.setView(S.marker.getLatLng(), S.map.getZoom()); } else initMap(); }, 40);
   updateEndInfo();
@@ -890,7 +890,7 @@ function aliasRows() {
 function renderPage() {
   const c = curCase(), cs = S.cs, F = c.feed, src = SRC(c);
   if (S.map) { try { S.map.remove(); } catch (e) { } S.map = null; S.marker = null; }
-  const pLabel = cs.f.parent ? geoLabel(cs.f.parent) : (F.parentText || '');
+  const pLabel = cs.f.parent ? geoLabel(cs.f.parent) : (cs.parentQ != null ? cs.parentQ : (F.parentText || ''));
   const thumbs = ['linear-gradient(135deg,#3a7bd5,#00d2ff)', 'linear-gradient(135deg,#f7971e,#ffd200)', 'linear-gradient(135deg,#11998e,#38ef7d)', 'linear-gradient(135deg,#8e2de2,#4a00e0)'];
   const tl = ['Exterior', 'Lobby', 'Room', 'Pool / view'];
   const provOpts = (typeof PROVIDER_ATTRIBUTIONS !== 'undefined' ? PROVIDER_ATTRIBUTIONS : ['Hopper']);
@@ -903,7 +903,7 @@ function renderPage() {
     ${row({ key: 'street', label: 'Street One', feed: F.street, input: txt('street') })}
     ${row({ key: 'street2', label: 'Street Two', feed: F.street2, input: txt('street2') })}
     ${row({ key: 'postal', label: 'Postal Code', feed: F.postal, input: txt('postal', 'w-sm') })}
-    ${row({ key: 'parent', label: 'Parent', reqd: true, act: false, input: `<div class="parent-box"><input type="text" readonly id="parentShow" class="${cs.f.parent ? 'ok' : ''}" value="${esc(pLabel)}"><button class="ibtn" style="width:32px;height:28px" data-parent="1" title="Search parent">🔍</button></div>`, msg: cs.f.parent ? '' : 'Please search for and select a parent' })}
+    ${row({ key: 'parent', label: 'Parent', reqd: true, act: false, input: `<div class="parent-box"><div class="pb-wrap"><input type="text" id="parentShow" class="${cs.f.parent ? 'ok' : ''}" value="${esc(pLabel)}" placeholder="Type a city, town or village" autocomplete="off" spellcheck="false"><div id="parentDrop" class="parent-drop hidden"></div></div><button class="ibtn pb-search" data-parent="1" title="Search">🔍</button></div>`, msg: cs.f.parent ? '' : 'Please search for and select a parent' })}
     ${row({ key: 'linked', label: 'Linked Locations', lock: false, act: false, input: `<div style="display:flex;gap:6px;flex-wrap:wrap"><select data-inert="1"><option>Select a relationship</option><option>Part of</option><option>Near</option></select><input type="text" data-inert="1" placeholder="Search for a location by name" style="max-width:200px"><button class="ibtn" style="background:#b39ddb;color:#fff;width:28px" data-inert="1">+</button></div>` })}
     ${row({ key: 'vgeo', label: 'Virtual Geos', lock: false, act: false, attr: false, input: `<div style="font-size:11.5px;color:#888">Virtual Geo · Link Information — none</div>` })}
   </div>
@@ -951,7 +951,7 @@ function renderPage() {
     <tbody>${src.votes.length ? src.votes.map(v => `<tr><td>${esc(v.type)}</td><td>${esc(v.comment)}</td><td>${esc(v.user)}</td><td>${esc(v.email)}</td><td>${esc(v.owner)}</td><td>${esc(v.date)}</td></tr>`).join('') : '<tr><td colspan="6" style="color:#999">No location votes</td></tr>'}</tbody></table>
   </div>
 
-  <div class="sec hideable" id="sec-geo">${secHead(ICO.pin, 'Geo Coding', applyBtn('geo'))}
+  <div class="sec" id="sec-geo">${secHead(ICO.pin, 'Geo Coding', applyBtn('geo'))}
     <div style="padding:0 6px">
       <div class="geo-inputs">Latitude <input id="geoLat" data-f="lat" value="${esc(cs.f.lat)}"> Longitude <input id="geoLng" data-f="lng" value="${esc(cs.f.lng)}">
         <button class="btn-apply" id="geoGo">📍 Move pin</button><button class="btn-apply" id="geoPaste">⇩ Paste "lat, lng"</button><button class="btn-apply" id="geoReset">↺ Reset to feed</button>
@@ -1133,41 +1133,44 @@ function geoMatch(a, b) {
   return pb.map(gNorm).includes(sa) || pa.map(gNorm).includes(sb);
 }
 
-function openParent() {
-  const c = curCase();
-  $('#mParentBox').innerHTML = `<div class="modal-h"><h3>🔍 Search for a parent geo</h3><button class="x" data-close="mParent">✕</button></div>
-    <div class="modal-b"><div class="pq-row"><input class="mselect" id="parentQ" value="${esc(c.feed.parentText || '')}" placeholder="Type a city, town or village — e.g. Edupuram"><button class="btn btn-pri" id="parentGo">Search</button></div>
-    <div class="pq-hint">Press <b>Enter</b> to search every city, town and village worldwide. Pick the <b>most specific</b> geo where the property is located — check the district, state and country!</div>
-    <div id="parentStatus" class="pq-status"></div><div id="parentRes"></div></div>`;
-  let online = null, seq = 0;
-  const localHits = () => {
-    const toks = norm($('#parentQ').value).split(' ').filter(t => t.length > 2); // skip 2-letter country codes like "IN"
-    return GEOS.filter(g => !String(g.id).startsWith('osm_') && !String(g.id).startsWith('gn_')).map(g => {
-      const hay = norm(g.name + ' ' + g.path); let s = 0;
-      toks.forEach(t => { if (hay.split(' ').includes(t)) s += 2; else if (hay.includes(t)) s += 1; });
-      return { g, s };
-    }).filter(x => x.s > 0).sort((a, b) => b.s - a.s).slice(0, 12).map(x => x.g);
-  };
-  const item = (g, tag) => { PARENT_RESULTS[g.id] = g; return `<div class="parent-res" data-pick="${esc(g.id)}"><code>${esc(tag)}</code><b>${esc(g.name)}</b><small>${esc(g.path || '')}</small></div>`; };
-  const draw = () => {
-    const loc = localHits(), on = online || [];
-    const locOnly = loc.filter(g => !on.some(o => geoMatch(o, g)));
-    const html = on.map(g => item(g, g.kind || 'place')).join('') + locOnly.map(g => item(g, g.noParent ? 'neighbourhood' : 'saved geo')).join('');
-    $('#parentRes').innerHTML = html || `<div class="pq-empty">${online ? 'No places found. Check the spelling, or try the nearest town.' : 'Press Enter to search all places worldwide.'}</div>`;
-  };
-  const go = async () => {
-    const q = $('#parentQ').value.trim(); if (q.length < 2) return;
-    const my = ++seq; $('#parentStatus').innerHTML = '<span class="spin"></span> Searching all places…';
-    try { const r = await geoSearchOnline(q); if (my !== seq) return; online = r; $('#parentStatus').textContent = r.length ? `${r.length} place(s) found for “${q}”` : ''; }
-    catch (e) { if (my !== seq) return; online = []; $('#parentStatus').innerHTML = '<span style="color:#b26a00">⚠ Worldwide search is unavailable (offline or blocked network). Showing geos saved in the simulator only.</span>'; }
-    draw();
-  };
-  $('#parentQ').oninput = () => { online = null; $('#parentStatus').textContent = ''; draw(); };
-  $('#parentQ').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); go(); } };
-  $('#parentGo').onclick = go;
-  draw(); openModal('mParent');
-  setTimeout(() => { const i = $('#parentQ'); i.focus(); i.select(); }, 50);
-  if ($('#parentQ').value.trim()) go();
+/* Parent field = an inline search bar (like the live LMT): type in the box → click 🔍 (or Enter) →
+   pick from the dropdown under the box. Editing the text after picking clears the selection. */
+function localGeoHits(q) {
+  const toks = norm(q).split(' ').filter(t => t.length > 2); // skip 2-letter country codes like "IN"
+  return GEOS.filter(g => !String(g.id).startsWith('osm_') && !String(g.id).startsWith('gn_')).map(g => {
+    const hay = norm(g.name + ' ' + g.path); let sc = 0;
+    toks.forEach(t => { if (hay.split(' ').includes(t)) sc += 2; else if (hay.includes(t)) sc += 1; });
+    return { g, sc };
+  }).filter(x => x.sc > 0).sort((a, b) => b.sc - a.sc).slice(0, 12).map(x => x.g);
+}
+const parentItem = (g, tag) => { PARENT_RESULTS[g.id] = g; return `<div class="parent-res" data-pick="${esc(g.id)}"><code>${esc(tag)}</code><b>${esc(g.name)}</b><small>${esc(g.path || '')}</small></div>`; };
+let parentSeq = 0;
+function drawParentDrop(q, online, status) {
+  const d = $('#parentDrop'); if (!d) return;
+  const loc = localGeoHits(q), on = online || [];
+  const locOnly = loc.filter(g => !on.some(o => geoMatch(o, g)));
+  const items = on.map(g => parentItem(g, g.kind || 'place')).join('') + locOnly.map(g => parentItem(g, g.noParent ? 'neighbourhood' : 'saved geo')).join('');
+  d.innerHTML = `<div class="pd-status">${status || ''}</div>${items || (online ? '<div class="pq-empty">No places found. Check the spelling, or try the nearest town.</div>' : '')}<div class="pd-hint">Pick the <b>most specific</b> geo — check the district, state and country.</div>`;
+  d.classList.remove('hidden'); d.dataset.active = '-1';
+}
+async function searchParent() {
+  const inp = $('#parentShow'); if (!inp) return;
+  const q = inp.value.trim();
+  if (q.length < 2) { toast('Type a city, town or village in the Parent box, then click 🔍'); inp.focus(); return; }
+  const my = ++parentSeq;
+  drawParentDrop(q, null, '<span class="spin"></span> Searching all places…');
+  let online = [], status = '';
+  try { online = await geoSearchOnline(q); status = online.length ? `${online.length} place(s) found for “${esc(q)}”` : ''; }
+  catch (e) { status = '<span style="color:#b26a00">⚠ Worldwide search is unavailable (offline or blocked network). Showing geos saved in the simulator only.</span>'; }
+  if (my !== parentSeq || !$('#parentShow')) return;
+  drawParentDrop(q, online, status);
+}
+function closeParentDrop() { parentSeq++; const d = $('#parentDrop'); if (d) d.classList.add('hidden'); }
+function moveParentActive(step) {
+  const d = $('#parentDrop'); if (!d || d.classList.contains('hidden')) return false;
+  const items = $$('#parentDrop .parent-res'); if (!items.length) return false;
+  let i = +d.dataset.active + step; i = Math.max(0, Math.min(items.length - 1, i)); d.dataset.active = i;
+  items.forEach((x, j) => x.classList.toggle('act', j === i)); items[i].scrollIntoView({ block: 'nearest' }); return true;
 }
 function registerGeo(id) {
   if (GEO_BY_ID[id]) return GEO_BY_ID[id];
@@ -1287,7 +1290,7 @@ function feedbackHtml(r) {
       ${r.critical ? `<div class="crit">🚨 ${r.decision === 'approve' ? 'You approved a listing that should not be created.' : r.decision === 'alias' ? 'You applied this request to a different property\'s listing — that overwrites a real listing with the wrong data.' : 'A fraud/legal case was rejected instead of escalated — the risk is never investigated.'} This scores 0.</div>` : ''}
       ${showFields ? `<h4 style="margin:16px 0 4px">Field-by-field review</h4><table class="fb-tbl"><tr><th>Field</th><th>You entered</th><th>Expected</th><th>Result</th></tr>
         ${r.fields.map(f => `<tr><td>${esc(f.label)}</td><td>${esc(f.given)}</td><td>${esc(f.exp)}</td><td class="${f.status === 'ok' ? 'ok-c' : f.status === 'partial' ? 'mid-c' : 'bad-c'}">${f.status === 'ok' ? '✔' : f.status === 'partial' ? '◐' : '✖'} <span style="font-weight:500;color:#555">${esc(f.note || '')}</span></td></tr>`).join('')}</table>` : ''}
-      <div class="${r.showAll ? 'habit ok' : 'habit bad'}">👁 <b>Show All Fields:</b> ${r.showAll ? `used${r.showAllSec != null ? ' after ' + fmtTime(r.showAllSec) : ''} ✔` : 'not used ✖ — Phone, Fax, Email, Description, Internal Comment and Geo Coding stayed hidden. On the live LMT, click it first on every request.'}${r.internal ? '' : ' · <span style="color:#9a6a00">No Internal Comment written.</span>'}</div>
+      <div class="${r.showAll ? 'habit ok' : 'habit bad'}">👁 <b>Show All Fields:</b> ${r.showAll ? `used${r.showAllSec != null ? ' after ' + fmtTime(r.showAllSec) : ''} ✔` : 'not used ✖ — Phone, Fax, Email, Description and the Internal Comment stayed hidden. On the live LMT, click it first on every request.'}${r.internal ? '' : ' · <span style="color:#9a6a00">No Internal Comment written.</span>'}</div>
       <div class="tipbox">🎓 <b>Coach's note:</b> ${esc(r.tip)}</div>
     </div>`;
 }
@@ -1448,6 +1451,14 @@ function bindGame() {
     const t = e.target, cs = S.cs;
     if (t.dataset.alias !== undefined) { const a = cs.aliases[+t.dataset.alias]; if (a) a.name = t.value; cs.applied.internal = false; refreshApplyBtn('internal'); return; }
     if (t.id === 'alNew') { cs.aliasDraft = t.value; return; }
+    if (t.id === 'parentShow') {
+      cs.parentQ = t.value;
+      if (cs.f.parent && t.value !== geoLabel(cs.f.parent)) {
+        cs.f.parent = ''; t.classList.remove('ok');
+        const m = pane.querySelector('[data-msg="parent"]'); if (m) m.textContent = 'Please search for and select a parent';
+      }
+      closeParentDrop(); return;
+    }
     const k = t.dataset.f; if (!k) return;
     if (['provAttr', 'provExp', 'internal'].includes(k)) { cs.applied.internal = false; refreshApplyBtn('internal'); }
     S.cs.f[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
@@ -1471,7 +1482,7 @@ function bindGame() {
     else if (d.rej) { cs.rej[d.rej] = !cs.rej[d.rej]; rerenderKeepScroll(); }
     else if (d.apply) applySection(d.apply);
     else if (d.lock) { cs.locks[d.lock] = !cs.locks[d.lock]; t.classList.toggle('on'); }
-    else if (d.parent) openParent();
+    else if (d.parent) searchParent();
     else if (d.pre) { if (d.pre === 'alias') linkAsAlias(); else linkAsNew(); }
     else if (d.openprov) openProvider();
     else if (d.thumb) { cs.f.thumb = d.thumb; $$('.thumb').forEach(x => x.classList.toggle('sel', x === t)); $('#thumbTxt').textContent = 'Selected: ' + d.thumb; }
@@ -1500,7 +1511,17 @@ function bindGame() {
   });
   pane.addEventListener('focusin', e => { if (e.target.id === 'provExp') e.target.type = 'date'; });
   pane.addEventListener('focusout', e => { if (e.target.id === 'provExp' && !e.target.value) e.target.type = 'text'; });
-  pane.addEventListener('keydown', e => { if (e.target.id === 'alNew' && e.key === 'Enter') { e.preventDefault(); const b = pane.querySelector('[data-aladd]'); if (b) b.click(); } });
+  pane.addEventListener('keydown', e => {
+    if (e.target.id === 'alNew' && e.key === 'Enter') { e.preventDefault(); const b = pane.querySelector('[data-aladd]'); if (b) b.click(); }
+    if (e.target.id === 'parentShow') {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { if (moveParentActive(e.key === 'ArrowDown' ? 1 : -1)) e.preventDefault(); }
+      else if (e.key === 'Enter') {
+        e.preventDefault();
+        const d = $('#parentDrop'), act = d && !d.classList.contains('hidden') ? $$('#parentDrop .parent-res')[+d.dataset.active] : null;
+        if (act) act.click(); else searchParent();
+      } else if (e.key === 'Escape') closeParentDrop();
+    }
+  });
   $('#btnTakeAction').onclick = () => openDecision(S.cs.pre || '');
   $('#hudExit').onclick = () => { generic('Exit mission?', '<p>Your progress on this day will be lost. Results are only saved after the last case.</p>', '<button class="btn btn-ghost" data-close="mGeneric">Stay</button><button class="btn btn-danger" id="exitYes">Exit to login</button>'); $('#exitYes').onclick = () => { closeModal('mGeneric'); clearInterval(S.timer); show('v-login'); }; };
   $('#btnNoMatch').onclick = linkAsNew;
@@ -1536,6 +1557,7 @@ function bindGame() {
   });
   // Reject menu (same reasons and order as the live LMT)
   $('#rejMenu').addEventListener('click', e => { const t = e.target.closest('[data-rej-reason]'); if (t) submitReject(t.dataset.rejReason); });
+  document.addEventListener('mousedown', e => { if (!e.target.closest('.pb-wrap') && !e.target.closest('[data-parent]')) closeParentDrop(); });
   document.addEventListener('mousedown', e => { const m = $('#rejMenu'); if (m && !m.classList.contains('hidden') && !e.target.closest('#rejMenu') && !e.target.closest('.abtn[data-act="reject"]')) m.classList.add('hidden'); });
   $$('.lbtn').forEach(b => b.onclick = () => {
     const k = b.dataset.lb;
@@ -1548,7 +1570,7 @@ function bindGame() {
     const c = e.target.closest('[data-close]'); if (c) closeModal(c.dataset.close);
     const p = e.target.closest('[data-pick]'); if (p && S.cs) {
       registerGeo(p.dataset.pick);
-      S.cs.f.parent = p.dataset.pick; closeModal('mParent');
+      S.cs.f.parent = p.dataset.pick; S.cs.parentQ = null; closeParentDrop();
       const ps = $('#parentShow'); if (ps) { ps.value = geoLabel(p.dataset.pick); ps.classList.add('ok'); const m = document.querySelector('#sec-basic [data-msg="parent"]'); if (m) m.textContent = ''; }
       toast('Parent selected: ' + geoLabel(p.dataset.pick), 2000);
     }

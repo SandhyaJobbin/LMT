@@ -464,3 +464,15 @@ a{color:#1667c4}
 .rej-menu{position:fixed;z-index:2600;background:#fff;border:1px solid #c9c9c9;border-radius:4px;box-shadow:0 6px 24px rgba(0,0,0,.18);padding:4px 0;min-width:250px;font-size:12.5px}
 .rej-menu div{padding:5px 14px;cursor:pointer;color:#222;white-space:nowrap}
 .rej-menu div:hover{background:#f1f5f9;color:#c0392b}
+/* v2.4 — Parent = inline search bar with dropdown results */
+.pb-wrap{position:relative;flex:1;max-width:300px}
+.parent-box .pb-wrap input{width:100%;max-width:300px!important}
+.parent-box .pb-search{width:32px;height:28px}
+.parent-drop{position:absolute;top:calc(100% + 3px);left:0;width:min(470px,72vw);max-height:310px;overflow:auto;background:#fff;border:1px solid #b9b9b9;border-radius:3px;box-shadow:0 8px 24px rgba(0,0,0,.18);z-index:60;font-size:12px}
+.parent-drop .parent-res{margin:0;border:0;border-bottom:1px solid #eee;border-radius:0;padding:6px 10px;font-size:12.5px}
+.parent-drop .parent-res:hover,.parent-drop .parent-res.act{background:#eef7f2}
+.parent-drop .parent-res small{font-size:11.5px}
+.pd-status{padding:6px 10px;color:#17663e;display:flex;gap:6px;align-items:center;border-bottom:1px solid #eee}
+.pd-status:empty{display:none}
+.pd-hint{padding:6px 10px;color:#8a96a3;font-size:11px;background:#fafafa}
+.parent-drop .pq-empty{padding:8px 10px}
