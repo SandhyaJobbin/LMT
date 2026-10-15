@@ -144,7 +144,7 @@
     <span class="sp"></span>
     <label><input type="checkbox" id="noEmail">No Email</label>
     <button class="abtn" style="background:#1f7a3a" data-act="approve">✔<span class="tt">Approve – Create New</span></button>
-    <button class="abtn" style="background:#d6322b" data-act="reject">⊗<span class="tt">Reject / Close</span></button>
+    <button class="abtn" style="background:#d6322b" data-act="reject">⊗<span class="tt">Reject – choose a reason</span></button>
     <button class="abtn" style="background:#7b4fd6" data-act="escalate">⬆<span class="tt">Escalate (Tier 1 / Tier 2)</span></button>
     <button class="abtn" style="background:#2a9fd6" data-act="defer">⏱<span class="tt">Defer – Keep In Progress</span></button>
     <button class="abtn" style="background:#555" data-act="email">✉<span class="tt">Email the property owner</span></button>
@@ -162,6 +162,7 @@
 <div class="modal-bg" id="mParent"><div class="modal" id="mParentBox"></div></div>
 <div class="modal-bg" id="mAdmin"><div class="modal full" id="mAdminBox"></div></div>
 <div class="modal-bg" id="mGeneric"><div class="modal wide" id="mGenericBox"></div></div>
+<div id="rejMenu" class="rej-menu hidden" role="menu"></div>
 
 <!-- Map library (optional – the simulator still works without it) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>

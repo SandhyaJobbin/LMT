@@ -2,7 +2,7 @@
    LMT PLACES SIMULATOR — SETTINGS  (edit this block only)
    ===================================================================== */
 const APP_CONFIG = {
-  VERSION: '2.1',
+  VERSION: '2.3',
 
   // Paste your Google Apps Script URL (ends in /exec) between the quotes so every
   // agent PC saves to the Google Sheet. Leave '' to run offline (browser storage).
@@ -28,6 +28,11 @@ const APP_CONFIG = {
     'Brazil', 'Argentina', 'Peru', 'Chile', 'Australia', 'New Zealand', 'Other'],
   DEFAULT_WAVES: [{ code: 'PLACES-W1', name: 'Places New Hire Wave 1', trainer: 'Jack Sparrow', days: '1,2,3,4,5' }],
   DEFAULT_SESSIONS: [{ id: 'S-DEMO-D1', name: 'Demo Session', trainer: 'Jack Sparrow', day: 1, wave: '' }],
+
+  // Parent search (🔍 next to Parent). Built-in geos show instantly; Enter searches every city, town and village worldwide
+  // with its full chain (village, sub-district, district, state, country). Free OpenStreetMap services, no key needed.
+  // Optional: put a free GeoNames username here (geonames.org → create account → enable "free web services") to search GeoNames first.
+  GEO_SEARCH: { providers: ['nominatim', 'photon'], geonamesUser: '', language: 'en', maxResults: 10 },
 
   // Left menu → "Helpful Links". Same five options as the live LMT, in the same order.
   // {name} = feed name · {city} = city from the feed's parent text · {cc} = its country code (e.g. IN)
@@ -118,7 +123,9 @@ const dayMeta = d => DAY_META_BUILTIN[d] || { title: 'Custom Day ' + d, icon: '�
 const LEVELS = [[0, 'Trainee Mapper'], [600, 'Geo Scout'], [1500, 'Data Ranger'], [2700, 'Listing Pro'], [4000, 'Places Specialist'], [5200, 'LMT Master']];
 const REQ_SECTIONS = { basic: 'Basic Info', contact: 'Contact Details', accom: 'Accommodation Info', geo: 'Geo Coding' };
 /* Sections that stay hidden on every new request until the agent clicks "Show All Fields" (same as the live LMT) */
-const HIDDEN_SECTIONS = { contact: 'Contact Details', desc: 'Description', internal: 'Internal', geo: 'Geo Coding' };
+const HIDDEN_SECTIONS = { desc: 'Description', internal: 'Internal', geo: 'Geo Coding' };
+/* Contact Details stays visible but shows only URL until "Show All Fields" (Phone, Fax, Email are hidden rows) */
+const HIDDEN_ROWS = ['phone', 'fax', 'email'];
 /* The feed NEVER pre-fills these — agents research them online (phone, email, URL) or from the
    provider page amenities / OTAs (type). Stripped from every question, built-in or trainer-made. */
 const RESEARCH_FIELDS = ['phone', 'fax', 'email', 'url', 'type'];
@@ -231,7 +238,9 @@ const TPL = [
   ['amen', 'Provider Amenities', 'Optional. Amenities shown on the provider snapshot — the clues agents use to pick the type. Separate with " ;; ". Blank = a standard list for the Correct Accommodation Type.'],
   ['ans.decision', 'Correct Action', 'Required. Approve, Alias, Reject, Tier 1, Tier 2 or Defer.'],
   ['ans.reason', 'Correct Reason', 'Required for Reject / Tier 1 / Tier 2 / Defer. Use a reason from the Lists sheet. Several accepted: separate with " | ".'],
-  ['ans.match', 'Existing Tripadvisor Listing (Alias)', 'For Alias: the Tripadvisor URL or location ID (d123456). Blank = any Tripadvisor listing link is accepted.'],
+  ['ans.match', 'Existing Tripadvisor Listing (Alias)', 'For Alias (possible match / dupe) cases: the existing listing\'s Tripadvisor URL or location ID (d123456). LMT shows it as the possible match, pre-filled with the Correct … values (plus any Current Values below). The agent clicks "Add name as alias" and edits what is wrong.'],
+  ['listingNow', 'Existing Listing – Current Values', 'Optional, Alias cases only. What the existing listing shows NOW, as field=value pairs separated by " ;; " — e.g.  type=Hotel ;; brand=BLANK. Values that differ from the Correct … columns are what the agent must edit. Fields: name, brand, street, street2, postal, phone, email, url, type, rooms.'],
+  ['decoy', 'Look-alike Listing (not a match)', 'Optional, non-Alias cases only. A similar existing listing that LMT shows as a possible match but is a DIFFERENT property:  Name ;; Address ;; Parent (City, Region, Country) ;; lat, lng ;; Type (optional). The agent must click "Not match, create new".'],
   ['ans.name', 'Correct Name', 'Expected value. Blank = not scored. BLANK = agent must leave it empty. Several accepted: " | ".'],
   ['ans.brand', 'Correct Brand', 'Same rules. Must match a brand in the Lists sheet, or BLANK.'],
   ['ans.street', 'Correct Street One', 'Same rules.'],
@@ -259,6 +268,7 @@ const DEC_ALIASES = { approve: 'approve', 'approve - create new': 'approve', cre
 const reasonFromText = t => {
   const s = String(t || '').trim().toLowerCase(); if (!s) return '';
   if (REASONS[s]) return s;
+  if (typeof LEGACY_REASONS !== 'undefined' && LEGACY_REASONS[s]) return LEGACY_REASONS[s];
   const hit = Object.entries(REASONS).find(([, r]) => r.label.toLowerCase() === s || r.label.toLowerCase().startsWith(s)); return hit ? hit[0] : null;
 };
 const multi = v => { const s = String(v == null ? '' : v).trim(); if (s === '') return undefined; if (s.toUpperCase() === 'BLANK') return ''; const p = s.split(/\s+\|\s+/).map(x => x.trim()).filter(Boolean); return p.length > 1 ? p : p[0]; };
@@ -291,11 +301,13 @@ function rowToQuestion(r) {
   if (g('ans.opening') && !/^\d{4}-\d{2}-\d{2}$/.test(g('ans.opening'))) err.push('Opening date must be YYYY-MM-DD');
   // parent(s): reuse an existing geo when the label matches, else create one. Alternatives separated by " | ".
   const geos = [], parents = [];
-  plabel.split(/\s+\|\s+/).map(s => s.trim()).filter(Boolean).forEach(lbl => {
+  const geoFor = lbl => {
     const ex = GEOS.find(x => norm(x.name + ', ' + x.path) === norm(lbl)) || GEOS.find(x => norm(x.name) === norm(lbl));
-    if (ex && !ex.noParent) parents.push(ex.id);
-    else { const parts = lbl.split(',').map(s => s.trim()).filter(Boolean); const geo = { id: 'cg_' + slug(lbl) + '_' + (sha256(lbl).slice(0, 4)), name: parts[0], path: parts.slice(1).join(', '), cc: '' }; geos.push(geo); parents.push(geo.id); }
-  });
+    if (ex && !ex.noParent) return ex.id;
+    const parts = lbl.split(',').map(s => s.trim()).filter(Boolean); const geo = { id: 'cg_' + slug(lbl) + '_' + (sha256(lbl).slice(0, 4)), name: parts[0], path: parts.slice(1).join(', '), cc: '' };
+    if (!geos.some(x => x.id === geo.id)) geos.push(geo); return geo.id;
+  };
+  plabel.split(/\s+\|\s+/).map(s => s.trim()).filter(Boolean).forEach(lbl => parents.push(geoFor(lbl)));
   const parent = parents.length > 1 ? parents : (parents[0] || '');
   const ans = { decision: dec, reason: reason.length > 1 ? reason : reason[0], parent, lat: alat, lng: alng };
   ['name', 'brand', 'street', 'street2', 'postal', 'phone', 'email', 'url', 'type'].forEach(k => { const v = multi(g('ans.' + k)); if (v !== undefined) ans[k] = v; });
@@ -304,6 +316,25 @@ function rowToQuestion(r) {
   if (g('ans.opening')) ans.opening = g('ans.opening');
   const ai = yn(g('ans.allIncl')); if (ai !== undefined) ans.allIncl = ai;
   if (g('ans.match')) ans.match = g('ans.match');
+  // possible match: current values of the existing listing (Alias) / look-alike listing (not a match)
+  const listingNow = {};
+  if (g('listingNow')) g('listingNow').split(/\s*;;\s*/).filter(Boolean).forEach(pair => {
+    const m = pair.match(/^\s*([a-z0-9]+)\s*=\s*(.*)$/i), k = m ? m[1].toLowerCase() : '';
+    if (!m || !LISTING_FIELDS.includes(k)) return err.push('Current Values: write field=value using ' + LISTING_FIELDS.join(', '));
+    let v = m[2].trim(); if (v.toUpperCase() === 'BLANK') v = '';
+    if (k === 'type' && v && !ACCOM_TYPES.includes(v)) err.push('Current Values: unknown type "' + v + '"');
+    listingNow[k] = v;
+  });
+  if (Object.keys(listingNow).length && dec && dec !== 'alias') err.push('Existing Listing – Current Values is only for Alias cases');
+  let listing;
+  if (g('decoy')) {
+    if (dec === 'alias') err.push('Look-alike Listing is only for non-Alias cases (an Alias case shows its real listing)');
+    else {
+      const [nm, addr, plbl, ll, ty] = g('decoy').split(/\s*;;\s*/), mm = String(ll || '').match(/(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)/);
+      if (!nm || !plbl || !mm) err.push('Look-alike Listing: use  Name ;; Address ;; Parent ;; lat, lng ;; Type');
+      else listing = { id: 'd' + (7000000 + parseInt(sha256(id + nm).slice(0, 5), 16) % 2000000), name: nm, street: addr || '', parent: geoFor(plbl), type: ty && ACCOM_TYPES.includes(ty.trim()) ? ty.trim() : '', lat: +mm[1], lng: +mm[2] };
+    }
+  }
   const feed = { name: g('feed.name'), lat: flat, lng: flng };
   ['brand', 'street', 'street2', 'postal', 'parentText', 'rooms', 'desc'].forEach(k => { if (g('feed.' + k)) feed[k] = g('feed.' + k); });
   const amen = g('amen') ? g('amen').split(/\s*;;\s*/).map(s => s.trim()).filter(Boolean) : undefined;
@@ -312,6 +343,7 @@ function rowToQuestion(r) {
     id, day, q: qn, active: yn(g('active')) !== false, feed, ans, geos, parentLabel: plabel, providerUrl: g('providerUrl'), amen,
     geoTol: Number(g('geoTol')) > 0 ? Number(g('geoTol')) : undefined, req: 130000000 + (parseInt(sha256(id).slice(0, 6), 16) % 9000000),
     src: { votes, owners: g('owners') ? [{ name: 'Owner record', status: '', date: '', note: g('owners') }] : [], audit: g('audit') ? [{ date: '', who: 'Note', what: g('audit') }] : undefined },
+    listingNow: Object.keys(listingNow).length ? listingNow : undefined, listing,
     tip: g('tip'), source: g('source'), updatedAt: nowIso()
   };
   return { q, errors: err };
@@ -327,10 +359,17 @@ function questionToRow(c) {
     'ans.opening': A.opening || '', 'ans.allIncl': A.allIncl === undefined ? '' : A.allIncl ? 'Y' : 'N',
     votes: ((c.src && c.src.votes) || []).map(v => v.type + ': ' + v.comment).join(' ;; '),
     owners: ((c.src && c.src.owners) || []).map(o => [o.name, o.status, o.note].filter(Boolean).join(' – ')).join(' ;; '),
-    audit: ((c.src && c.src.audit) || []).map(a => a.what).join(' ;; ')
+    audit: ((c.src && c.src.audit) || []).map(a => a.what).join(' ;; '),
+    listingNow: '', decoy: ''
   };
   ['name', 'brand', 'street', 'street2', 'postal', 'phone', 'email', 'url', 'rooms', 'floors'].forEach(k => r['ans.' + k] = join(A[k]));
   r['ans.type'] = A.type === '' ? 'N/A' : join(A.type);
+  const L = listingFor(c);
+  if (L && A.decision === 'alias') {
+    if (!A.match) r['ans.match'] = L.id;
+    r.listingNow = LISTING_FIELDS.filter(k => L[k] !== undefined && L[k] !== null && !(A[k] !== undefined && [].concat(A[k]).some(v => String(v) === String(L[k]))))
+      .map(k => k + '=' + (L[k] === '' ? 'BLANK' : L[k])).join(' ;; ');
+  } else if (L) r.decoy = [L.name, [L.street, L.postal].filter(Boolean).join(', '), geoLabel(L.parent), L.lat + ', ' + L.lng, L.type || ''].join(' ;; ');
   ['name', 'brand', 'street', 'street2', 'postal', 'parentText', 'rooms', 'lat', 'lng', 'desc'].forEach(k => r['feed.' + k] = F[k] == null ? '' : F[k]);
   return r;
 }
@@ -413,16 +452,16 @@ function showGuide() {
   </div>
 
   <div class="gsec"><h3><span class="n">1</span>The LMT request page — scroll from top to bottom</h3>
-    <div class="infobox" style="margin-top:0"><b>👁 First click on every request: Show All Fields</b> (left menu). Like the live LMT, each new request opens with <b>Contact Details, Description, Internal and Geo Coding hidden</b>. Fraud clues often sit in the Description — if you skip this step you will miss them.</div>
+    <div class="infobox" style="margin-top:0"><b>👁 First click on every request: Show All Fields</b> (left menu). Like the live LMT, each new request opens with <b>Phone, Fax and Email (Contact Details shows only URL), Description, Internal and Geo Coding hidden</b>. Fraud clues often sit in the Description — if you skip this step you will miss them.</div>
     <div class="steps5">
-      <div class="s5"><i>👁</i><b>Show All Fields</b><p>Reveals Contact Details, Description, Internal Comment and Geo Coding. Do it before anything else.</p></div>
-      <div class="s5"><i>🪪</i><b>Basic Info</b><p>Name, Brand, Street One/Two, Postal Code and <b>Parent</b> (search 🔍 and pick the most specific geo). Click <b>Apply</b>.</p></div>
+      <div class="s5"><i>👁</i><b>Show All Fields</b><p>Reveals Phone, Fax, Email, Description, Internal Comment and Geo Coding. Do it before anything else.</p></div>
+      <div class="s5"><i>🔗</i><b>Possible match?</b><p>If LMT shows a <b>possible match</b>, compare it. Same property → <b>＋ Add name as alias</b> and edit what sources say is wrong. Different → <b>✔＋ Not match, create new</b>.</p></div>
+      <div class="s5"><i>🪪</i><b>Basic Info</b><p>Name, Brand, Street One/Two, Postal Code and <b>Parent</b> (search 🔍 any town or village and pick the most specific geo).</p></div>
       <div class="s5"><i>🔗</i><b>Provider Link</b><p>Click <b>Open Provider Page in New Tab</b>. Read the <b>amenities</b> — they tell you the accommodation type.</p></div>
-      <div class="s5"><i>📖</i><b>Contact &amp; Accommodation</b><p>The feed sends <b>no phone, email, URL or type</b>. Find them online, type them in, then <b>Apply</b>.</p></div>
-      <div class="s5"><i>🏷️</i><b>Internal</b><p>Write an <b>Internal Comment</b> with the evidence you used. Check the aliases.</p></div>
-      <div class="s5"><i>📍</i><b>Geo Coding</b><p>Fix the pin: click the map, drag the marker or paste coordinates from Google Maps.</p></div>
+      <div class="s5"><i>📖</i><b>Contact &amp; Accommodation</b><p>The feed sends <b>no phone, email, URL or type</b>. Find them online and type them in.</p></div>
+      <div class="s5"><i>🏷️</i><b>Internal &amp; Geo</b><p>Write an <b>Internal Comment</b> with your evidence. Fix the pin on the map or paste coordinates from Google Maps.</p></div>
     </div>
-    <p style="font-size:12.5px;color:#6b7785;margin:10px 0 0">The left menu jumps to a section. When everything is applied, use the action buttons (bottom-right) or <b>Take Action</b> at the end of the page.</p>
+    <p style="font-size:12.5px;color:#6b7785;margin:10px 0 0">The left menu jumps to a section. <b>Apply</b> is optional — it just marks a section as checked. When you are done, use the action buttons (bottom-right) or <b>Take Action</b> at the end of the page.</p>
   </div>
 
   <div class="gsec"><h3><span class="n">2</span>How to research (in your own Chrome)</h3>
@@ -430,7 +469,7 @@ function showGuide() {
       <li><b>Helpful Links</b> (left menu) has the same five options as the live tool: <b>Google · Google Maps · Geonames · Tripadvisor · StreetFinder</b>. For the official website, Facebook or Instagram, search Google yourself and adjust the search words until you find the property.</li>
       <li><b>Phone, Email and URL</b> are never in the feed — copy them from the official website, Google Maps or the Kerala Tourism listing.</li>
       <li><b>Accommodation Type</b> is never in the feed — decide it from the amenities on the provider page and OTAs (front desk? pool and spa? family home with a few rooms?).</li>
-      <li>Always check <b>Tripadvisor</b> first. If the property is already listed (same address + phone), it's a duplicate — copy its Tripadvisor link and use <b>Add name as alias</b>.</li>
+      <li><b>Possible match / dupe:</b> when LMT shows an existing listing, the fields hold that listing's <b>current values</b>. If it is the same property (same address, phone, location), click <b>＋ Add name as alias</b> — the request is applied to the current listing — then <b>edit any field your sources say is wrong</b> (e.g. a missing Brand or the wrong type). If it is a different property, click <b>✔＋ Not match, create new</b>. No match shown? Still search Tripadvisor before creating.</li>
       <li>Get coordinates from Google Maps: right-click the property pin → click the numbers at the top to copy them.</li>
       <li>The <b>Requested Change</b> column is what the feed sent. Use <b>➜</b> to copy it across or <b>✖</b> to reject a wrong value. Feeds are often wrong!</li>
       <li>Check <b>AuditTrail</b>, <b>Owners</b> (beige bar), <b>Location Votes</b> and the <b>Description</b> — internal evidence lives there.</li>
@@ -464,8 +503,8 @@ function showGuide() {
     <table class="gtable">
       <tr><th style="width:170px">Action</th><th>When to use it</th><th style="width:260px">Reasons</th></tr>
       <tr><td>${dchip('approve')}</td><td>Property exists, is open, is an accommodation, not on Tripadvisor yet, and sources agree.</td><td>New property – verified</td></tr>
-      <tr><td>${dchip('alias')}</td><td>Tripadvisor already has it (same address + phone), even under another or older name. Paste the existing listing link.</td><td>Existing listing – add alias</td></tr>
-      <tr><td>${dchip('reject')}</td><td>Permanently closed · not an accommodation · zero evidence it exists anywhere online.</td><td>Closed · Not an accommodation · Unverifiable</td></tr>
+      <tr><td>${dchip('alias')}</td><td>Possible match / dupe: Tripadvisor already has it (same address + phone), even under another or older name. Click <b>Add name as alias</b> to apply the request to the current listing, edit what sources say is wrong, then ✔.</td><td>Match / dupe – applied to existing listing</td></tr>
+      <tr><td>${dchip('reject')}</td><td>The red ⊗ button opens the reject menu — pick the reason that fits.</td><td>Page down · Vacation Rental · Single unit property · Cannot verify · Property closed · Property removed from TA · Former name · More than 7 night stay required · Not open to public (restricted access) · Open less than 12 consecutive weeks · Not stationary (cruise) · Incorrect property type (not an accommodation)</td></tr>
       <tr><td>${dchip('t1')}</td><td>Real property, but sources conflict (address, phone, location) and you can't decide which is right.</td><td>Conflicting data · Location unconfirmed</td></tr>
       <tr><td>${dchip('t2')}</td><td>Fraud/scam signals, brand or ownership disputes, safety or legal issues. Never just reject these.</td><td>Fraud · Brand dispute · Safety/legal</td></tr>
       <tr><td>${dchip('defer')}</td><td>Real but not open yet — capture data incl. Opening Date and keep it In Progress.</td><td>Pre-opening</td></tr>
@@ -475,9 +514,9 @@ function showGuide() {
   <div class="gsec"><h3><span class="n">5</span>Scoring &amp; XP</h3>
     <table class="gtable">
       <tr><th>Component</th><th>Points</th><th>Notes</th></tr>
-      <tr><td>Correct action</td><td>30</td><td>Wrong action = only 30% of your data-capture score. Approving a duplicate, closed, fake or escalation case = <b>critical error, 0 points</b>.</td></tr>
+      <tr><td>Correct action</td><td>30</td><td>Wrong action = only 30% of your data-capture score. Approving a duplicate, closed, fake or escalation case, or applying a request to a <b>different</b> property's listing = <b>critical error, 0 points</b>.</td></tr>
       <tr><td>Correct reason</td><td>10</td><td>Automatic for Approve / Alias.</td></tr>
-      <tr><td>Data capture</td><td>60</td><td>Weighted field accuracy: Name 10 · Parent 8 · Type 8 · Street 6 · Phone 6 · Geo 6 · Postal/Email/URL/Rooms/Brand/Opening 4 · Street Two/Floors/All-incl. 2. For Alias it's the Tripadvisor link; for Reject/Escalate it's earned by the correct action.</td></tr>
+      <tr><td>Data capture</td><td>60</td><td>Weighted field accuracy: Name 10 · Parent 8 · Type 8 · Street 6 · Phone 6 · Geo 6 · Postal/Email/URL/Rooms/Brand/Opening 4 · Street Two/Floors/All-incl. 2. For Alias it's the existing listing's values after your edits; for Reject/Escalate it's earned by the correct action.</td></tr>
       <tr><td>XP bonuses</td><td>+5 … +40</td><td>Speed (≤6 min +15, ≤10 min +5) and a streak of ≥80% cases (+5 per case in a row, max +25).</td></tr>
     </table>
     <p style="font-size:12.5px;color:#6b7785;margin:10px 0 0">Badges: 💎 Flawless · 🎯 Geo Sniper · 🕵️ Fraud Hound · 🧬 Duplicate Detective · ⚡ Speed Runner · 🔥 Hot Streak · 🛡️ Zero Critical.</p>
@@ -551,6 +590,10 @@ function scoreField(k, expRaw, f, tol) {
     r.exp = `${expRaw.lat}, ${expRaw.lng}`; r.dist = d; return r;
   }
   let given = f[k];
+  if (k === 'parent') {
+    const g = GEO_BY_ID[f.parent], ok = !!g && exps.some(e => e === f.parent || geoMatch(g, GEO_BY_ID[e]));
+    return ok ? res(1) : res(0, g ? 'Different place — check the town, district, state and country' : 'No parent selected');
+  }
   if (k === 'allIncl') { const g = !!given; return exps.some(e => !!e === g) ? res(1) : res(0, g ? 'Not all-inclusive' : 'Property is all-inclusive'); }
   if (k === 'type' && given === 'N/A') given = '';
   given = given == null ? '' : String(given).trim();
@@ -600,20 +643,21 @@ function scoreCase(c, cs, dec) {
     earned += d.w * r.frac; possible += d.w;
   }
   const fieldsPct = possible ? earned / possible : 1;
-  // Alias: agent pastes the existing Tripadvisor listing link / ID
+  // Alias: the request must be applied to the right existing listing; then the listing's edited values are scored
   let matchOk = false;
   if (dec.decision === 'alias') {
     const got = taId(dec.match), want = taId(A.match);
-    matchOk = want ? got === want : (!!got && /tripadvisor\./i.test(dec.match || '')) || !!got;
+    matchOk = expD === 'alias' && (want ? got === want : !!got || !!dec.match);
   }
   let score, critical = false;
   if (decisionOk) {
-    const capture = mode === 'fields' ? fieldsPct : mode === 'match' ? (matchOk ? 1 : 0) : 1;
+    const capture = mode === 'fields' ? fieldsPct : mode === 'match' ? (matchOk ? fieldsPct : 0) : 1;
     score = 30 + (reasonOk ? 10 : 0) + 60 * capture;
   } else {
     score = 30 * fieldsPct;
     if (dec.decision === 'approve' && ['reject', 't2', 't1', 'alias'].includes(expD)) { critical = true; score = 0; }
     if (dec.decision === 'reject' && expD === 't2') { critical = true; score = 0; }
+    if (dec.decision === 'alias' && expD === 'approve') { critical = true; score = 0; } // merged a different property into an existing listing
   }
   return { score: Math.round(score), decisionOk, reasonOk, matchOk, mode, fields, fieldsPct, critical };
 }
@@ -663,15 +707,82 @@ function startGame() {
   clearInterval(S.timer);
   S.timer = setInterval(() => { if (S.cs) $('#hudTimer').textContent = fmtTime((Date.now() - S.cs.start) / 1000); }, 1000);
 }
+/* ---------------- possible match (existing Tripadvisor listing) ----------------
+   Like the live LMT: when the request has a possible match / dupe, the page opens on that existing
+   listing — the input column shows its CURRENT values, the Requested Change column shows the feed.
+   Same property → "Add name as alias" applies the request to the listing; the agent then edits any
+   field the sources prove wrong. Different property → "Not match, create new" clears the form. */
+const LISTING_FIELDS = ['name', 'brand', 'street', 'street2', 'postal', 'phone', 'email', 'url', 'type', 'rooms'];
+function listingFor(c) {
+  if (c._listing !== undefined) return c._listing;
+  const A = c.ans || {};
+  let L = null;
+  if (c.listing) L = Object.assign({}, c.listing);
+  else if (A.decision === 'alias') {           // trainer question: build the listing from the Correct … columns
+    L = { id: taId(A.match) ? 'd' + taId(A.match) : 'd' + (300000 + (c.req || 0) % 600000) };
+    LISTING_FIELDS.forEach(k => { const v = first(A[k]); if (v !== undefined && v !== null) L[k] = v; });
+    L.parent = first(A.parent); L.lat = A.lat; L.lng = A.lng;
+  }
+  if (L) {
+    Object.assign(L, c.listingNow || {});      // current (possibly outdated) values shown in LMT
+    L.isMatch = A.decision === 'alias';
+    const tid = taId(L.id); L.id = tid ? 'd' + tid : String(L.id || '');
+    L.taUrl = L.taUrl || (L.isMatch && tid ? (/^https?:/i.test(A.match || '') ? A.match : 'https://www.tripadvisor.com/Hotel_Review-d' + tid) : 'https://www.tripadvisor.com/Search?q=' + encodeURIComponent(L.name || ''));
+  }
+  c._listing = L; return L;
+}
+function blankFields(c) {
+  return { name: '', brand: '', former: '', street: '', street2: '', postal: '', parent: '', phone: '', fax: '', email: '', url: '', desc: '', thumb: '', opening: '', floors: '', rooms: '', type: '', allIncl: false, lat: String(c.feed.lat), lng: String(c.feed.lng),
+    provAttr: '', provExp: '', internal: '' };
+}
+function listingFields(c, L) {
+  const f = blankFields(c);
+  LISTING_FIELDS.forEach(k => { if (L[k] !== undefined && L[k] !== null) f[k] = String(L[k]); });
+  if (L.parent) f.parent = L.parent;
+  if (L.lat !== undefined && L.lng !== undefined) { f.lat = String(L.lat); f.lng = String(L.lng); }
+  return f;
+}
 function newCaseState(c) {
+  const L = listingFor(c);
   return {
     applied: {}, rej: {}, locks: {}, attr: {}, start: Date.now(), notes: '', pre: '', providerSeen: false, emails: 0,
     showAll: false, showAllUsed: false, showAllSec: null,
-    f: { name: '', brand: '', former: '', street: '', street2: '', postal: '', parent: '', phone: '', fax: '', email: '', url: '', desc: '', thumb: '', opening: '', floors: '', rooms: '', type: '', allIncl: false, lat: String(c.feed.lat), lng: String(c.feed.lng),
-      provAttr: '', provExp: '', internal: '' },
-    // LMT stores the provider's own name as a (non-searchable) alias
-    aliases: c.feed.name ? [{ name: c.feed.name, searchable: false }] : [], aliasDraft: '', aliasDraftS: false
+    link: L ? 'pending' : 'new',               // pending = possible match shown, not decided yet · alias · new
+    f: L ? listingFields(c, L) : blankFields(c),
+    // New listing: the provider's name is kept as a non-searchable alias. Existing listing: its own aliases.
+    aliases: L ? (L.aliases || []).map(a => ({ name: a, searchable: true })) : (c.feed.name ? [{ name: c.feed.name, searchable: false }] : []),
+    aliasDraft: '', aliasDraftS: false
   };
+}
+function linkAsAlias() {
+  const c = curCase(), cs = S.cs, L = listingFor(c);
+  cs.pre = 'alias';
+  if (!L) { updateEndInfo(); return toast('No possible match on this request. If Tripadvisor already has it, use Take Action → Add Name as Alias and paste the listing link.', 4200); }
+  const keepNotes = cs.f.internal;
+  if (cs.link === 'new') { const f = listingFields(c, L); f.internal = keepNotes; cs.f = f; cs.aliases = (L.aliases || []).map(a => ({ name: a, searchable: true })); }
+  cs.link = 'alias';
+  if (c.feed.name && !cs.aliases.some(a => norm(a.name) === norm(c.feed.name))) cs.aliases.push({ name: c.feed.name, searchable: false });
+  cs.applied = {}; rerenderKeepScroll();
+  toast('＋ Request applied to the existing listing ' + L.id + ' — feed name added as alias. Edit any field your sources say is wrong, then ✔ Take Action.', 4200);
+}
+function linkAsNew() {
+  const c = curCase(), cs = S.cs, L = listingFor(c);
+  cs.pre = 'approve';
+  if (L && cs.link !== 'new') { const keep = cs.f.internal; cs.f = blankFields(c); cs.f.internal = keep; cs.aliases = c.feed.name ? [{ name: c.feed.name, searchable: false }] : []; cs.applied = {}; }
+  cs.link = 'new'; rerenderKeepScroll();
+  toast(L ? '✔＋ Not a match — the form is cleared for a NEW listing. Research every field from sources.' : 'Marked: no match exists on Tripadvisor → create new. Make sure you searched tripadvisor.com first!', 3800);
+}
+function matchBox() {
+  const c = curCase(), cs = S.cs, L = listingFor(c); if (!L) return '';
+  const d = haversine(+c.feed.lat, +c.feed.lng, +L.lat, +L.lng), ds = isNaN(d) ? '—' : d < 1000 ? Math.round(d) + ' m' : (d / 1000).toFixed(d < 10000 ? 1 : 0) + ' km';
+  const st = { pending: ['pm-pending', 'The fields below show this listing\'s <b>current values</b>. <b>Same property?</b> → <b>＋ Add name as alias</b>, then edit anything your sources say is wrong. <b>Different property?</b> → <b>✔＋ Not match, create new</b>.'],
+    alias: ['pm-alias', '✔ <b>Request applied to this listing.</b> The feed name was added as an alias. Edit any field your sources say is wrong, then ✔ Take Action.'],
+    new: ['pm-new', '✖ <b>Marked as not a match</b> — you are creating a new listing. (Changed your mind? Click ＋ Add name as alias.)'] }[cs.link];
+  return `<div class="pm-box ${st[0]}"><div class="pm-h">${ICO.link} Possible match on Tripadvisor</div>
+    <table class="pm-tbl"><thead><tr><th>Location ID</th><th>Name</th><th>Address</th><th>Parent</th><th>Type</th><th>Distance from request pin</th><th></th></tr></thead>
+    <tbody><tr><td><code>${esc(L.id)}</code></td><td><b>${esc(L.name || '')}</b></td><td>${esc([L.street, L.street2, L.postal].filter(Boolean).join(', '))}</td><td>${esc(geoLabel(L.parent))}</td><td>${esc(L.type || '—')}</td><td>${ds}</td>
+    <td><a href="${esc(L.taUrl)}" target="_blank" rel="noopener">View on Tripadvisor ↗</a></td></tr></tbody></table>
+    <div class="pm-note">${st[1]}</div></div>`;
 }
 function curCase() { return S.cases[S.idx]; }
 function loadCase() {
@@ -686,7 +797,7 @@ function applyFieldVisibility() {
   const on = !!(S.cs && S.cs.showAll);
   $('#casePane').classList.toggle('fields-hidden', !on);
   const b = $('#btnHideFields');
-  if (b) { b.innerHTML = on ? '<span class="eye">👁</span> Hide Fields' : '<span class="eye">👁</span> Show All Fields'; b.classList.toggle('on', on); b.title = on ? 'Hide empty sections again' : 'Show Contact Details, Description, Internal and Geo Coding'; }
+  if (b) { b.innerHTML = on ? '<span class="eye">👁</span> Hide Fields' : '<span class="eye">👁</span> Show All Fields'; b.classList.toggle('on', on); b.title = on ? 'Hide fields again' : 'Show Phone, Fax, Email, Description, Internal and Geo Coding'; }
   $$('#navList [data-jump]').forEach(d => { const k = (d.dataset.jump || '').replace('sec-', ''); d.classList.toggle('hid', !on && !!HIDDEN_SECTIONS[k]); });
   if (on) setTimeout(() => { if (S.map) { S.map.invalidateSize(); if (S.marker) S.map.setView(S.marker.getLatLng(), S.map.getZoom()); } else initMap(); }, 40);
   updateEndInfo();
@@ -725,7 +836,7 @@ function renderLeft() {
 function updateEndInfo() {
   const cs = S.cs, el = $('#endInfo'); if (!el) return;
   const done = Object.keys(REQ_SECTIONS).filter(k => cs.applied[k]);
-  el.innerHTML = `Applied <b>${done.length}/4</b> required sections · ${Object.entries(REQ_SECTIONS).map(([k, l]) => (cs.applied[k] ? '✔ ' : '○ ') + l).join(' · ')}${cs.pre ? ` · Pre-selected: <b>${DECISIONS[cs.pre].short}</b>` : ''}${cs.showAll ? '' : ' · <span style="color:#9a6a00">some fields are hidden</span>'}`;
+  el.innerHTML = `Applied (optional): ${Object.entries(REQ_SECTIONS).map(([k, l]) => (cs.applied[k] ? '✔ ' : '○ ') + l).join(' · ')}${cs.pre ? ` · Pre-selected: <b>${DECISIONS[cs.pre].short}</b>` : ''}${cs.showAll ? '' : ' · <span style="color:#9a6a00">some fields are hidden</span>'}`;
 }
 
 /* ---------------- page rendering (all sections, one scrolling page) ---------------- */
@@ -756,7 +867,7 @@ function row(o) {
   const cs = S.cs, key = o.key;
   const fv = o.feed === undefined || o.feed === null ? '' : String(o.feed);
   const hasFeed = fv !== '';
-  return `<div class="lrow" data-row="${key}">
+  return `<div class="lrow${HIDDEN_ROWS.includes(key) ? ' hideable-row' : ''}" data-row="${key}">
     <div class="lbl ${o.reqd ? 'reqd' : ''}">${o.label}:</div>
     <div class="rq ${cs.rej[key] ? 'rej' : ''} ${o.redFeed ? 'red' : ''}">${esc(fv)}</div>
     <div class="act">${hasFeed && o.act !== false ? `<button class="ibtn" data-rej="${key}" title="Reject requested change">✖</button><button class="ibtn" data-copy="${key}" title="Accept requested change">➜</button>` : ''}</div>
@@ -784,7 +895,8 @@ function renderPage() {
   const tl = ['Exterior', 'Lobby', 'Room', 'Pool / view'];
   const provOpts = (typeof PROVIDER_ATTRIBUTIONS !== 'undefined' ? PROVIDER_ATTRIBUTIONS : ['Hopper']);
   $('#casePane').innerHTML = `
-  <div class="sec" id="sec-basic">${secHead(ICO.basic, 'Basic Info', applyBtn('basic') + `<button class="btn-alias" data-pre="alias">＋ Add name as alias</button><button class="btn-createnew" data-pre="approve">✔＋ Not match, create new</button>`)}
+  <div class="sec" id="sec-basic">${secHead(ICO.basic, 'Basic Info', applyBtn('basic') + `<button class="btn-alias ${cs.link === 'alias' ? 'on' : ''}" data-pre="alias">＋ Add name as alias</button><button class="btn-createnew ${cs.link === 'new' && listingFor(c) ? 'on' : ''}" data-pre="approve">✔＋ Not match, create new</button>`)}
+    ${matchBox()}
     ${row({ key: 'name', label: 'Name', feed: F.name, reqd: true, redFeed: true, input: txt('name', cs.f.name ? '' : 'invalid'), msg: cs.f.name ? '' : 'Please provide a name' })}
     ${row({ key: 'brand', label: 'Brand', feed: F.brand, lock: false, input: `<select data-f="brand"><option value="">Select Brand …</option>${BRANDS.map(b => `<option${b === cs.f.brand ? ' selected' : ''}>${esc(b)}</option>`).join('')}</select>` })}
     ${row({ key: 'former', label: 'Former Name', lock: false, input: txt('former') })}
@@ -802,7 +914,7 @@ function renderPage() {
       <div class="prov-frame" style="margin-top:6px"><div class="sad">📄</div><div style="font-size:12px">hopper.com refused to connect.</div></div></div><div class="attr">${attrSel('provider')}</div></div>
   </div>
 
-  <div class="sec hideable" id="sec-contact">${secHead(ICO.book, 'Contact Details', applyBtn('contact'))}
+  <div class="sec" id="sec-contact">${secHead(ICO.book, 'Contact Details', applyBtn('contact'))}
     ${row({ key: 'phone', label: 'Phone', input: txt('phone', 'w-md') })}
     ${row({ key: 'fax', label: 'Fax', input: txt('fax', 'w-md') })}
     ${row({ key: 'email', label: 'Email', input: txt('email', 'w-md') })}
@@ -889,43 +1001,13 @@ function refreshApplyBtn(sec) {
 
 /* ---------------- apply & validation ---------------- */
 function applySection(sec, quiet) {
-  const f = S.cs.f, errs = {};
-  const setMsg = (k, m) => { errs[k] = m; };
-  if (sec === 'basic') {
-    if (!f.name.trim()) setMsg('name', 'Please provide a name');
-    else if (f.name.replace(/[^A-Za-z]/g, '').length >= 4 && f.name === f.name.toUpperCase()) setMsg('name', 'Names must not be in ALL CAPS');
-    if (!f.parent) setMsg('parent', 'Please search for and select a parent');
-  }
-  if (sec === 'contact') {
-    if (f.phone && !/^\+\d[\d\s().-]{5,}$/.test(f.phone.trim())) setMsg('phone', 'Use international format starting with +country code, e.g. +91 487 233 9104');
-    if (f.fax && !/^\+\d[\d\s().-]{5,}$/.test(f.fax.trim())) setMsg('fax', 'Use international format');
-    if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(f.email.trim())) setMsg('email', 'Enter a valid email address');
-    if (f.url && !/^https?:\/\/[^\s.]+\.[^\s]+$/i.test(f.url.trim())) setMsg('url', 'URL must start with http:// or https://');
-    if (f.url && /(facebook\.|instagram\.|fb\.com|hopper\.|booking\.com|agoda\.|expedia\.|tripadvisor\.|google\.)/i.test(f.url)) setMsg('url', 'Use the official website only — not social media, maps or OTA links');
-  }
-  if (sec === 'accom') {
-    if (!f.type) setMsg('type', 'Please select an accommodation type');
-    if (f.rooms !== '' && (isNaN(+f.rooms) || +f.rooms < 0)) setMsg('rooms', 'Rooms must be a number');
-    if (f.floors !== '' && (isNaN(+f.floors) || +f.floors < 0)) setMsg('floors', 'Floors must be a number');
-  }
-  if (sec === 'geo') {
-    const la = parseFloat(f.lat), ln = parseFloat(f.lng);
-    if (isNaN(la) || isNaN(ln) || Math.abs(la) > 90 || Math.abs(ln) > 180) setMsg('lat', 'bad');
-  }
-  if (sec === 'desc' && f.desc.trim() && f.desc.trim().length < 20) setMsg('desc', 'Write at least one full sentence');
-  if (sec === 'internal') {
-    if (f.provExp && !f.provAttr) setMsg('provAttr', 'Select the provider the expiration date belongs to');
-    if (S.cs.aliases.some(a => !a.name.trim())) setMsg('aliases', 'Remove empty aliases (🗑) before applying');
-  }
-  const secEl = '#sec-' + sec;
-  $$(secEl + ' [data-msg]').forEach(m => { m.textContent = errs[m.dataset.msg] || ''; });
-  if (Object.keys(errs).length) {
-    S.cs.applied[sec] = false; refreshApplyBtn(sec);
-    if (!quiet) toast(sec === 'geo' ? '⚠ Enter valid coordinates first' : '⚠ Fix the highlighted fields, then Apply again');
-    return false;
-  }
+  // v2.2: Apply is optional and never blocks — it only records that the agent checked the section.
+  // No format rules (country code, email, URL, ALL CAPS, …); mistakes are caught by scoring instead.
+  const f = S.cs.f;
   S.cs.applied[sec] = true; refreshApplyBtn(sec);
-  if (sec === 'geo') moveMarker();
+  if (sec === 'basic') { const m = document.querySelector('#sec-basic [data-msg="name"]'); if (m && f.name.trim()) m.textContent = ''; }
+  if (sec === 'accom') { const m = document.querySelector('#sec-accom [data-msg="type"]'); if (m && f.type) m.textContent = ''; }
+  if (sec === 'geo') { const la = parseFloat(f.lat), ln = parseFloat(f.lng); if (!isNaN(la) && !isNaN(ln) && Math.abs(la) <= 90 && Math.abs(ln) <= 180) moveMarker(); }
   if (!quiet) toast('✔ ' + ({ basic: 'Basic Info', contact: 'Contact Details', desc: 'Description', photos: 'Photos', accom: 'Accommodation Info', internal: 'Internal', geo: 'Geo Coding' })[sec] + ' applied', 1400);
   return true;
 }
@@ -966,23 +1048,131 @@ function renderHelpful() {
 }
 function helpfulLink(i) { const u = helpfulLinkUrl(i); if (u) window.open(u, '_blank', 'noopener'); }
 
-/* ---------------- parent search ---------------- */
+/* ---------------- parent search ----------------
+   Built-in geos appear instantly while typing. Press Enter (or Search) to look the place up worldwide —
+   any city, town or village, returned with its full chain, e.g.
+   "Edupuram" → Edupuram, Ichchapuram, Srikakulam, Andhra Pradesh, India.
+   Providers are set in APP_CONFIG.GEO_SEARCH (OpenStreetMap Nominatim → Photon; GeoNames if a username is set). */
+const GEO_CACHE = {}, PARENT_RESULTS = {};
+let geoLastCall = 0;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function fetchJson(u) {
+  const wait = 1100 - (Date.now() - geoLastCall); if (wait > 0) await sleep(wait); // public servers allow ~1 request/second
+  geoLastCall = Date.now();
+  const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null, tm = setTimeout(() => ctl && ctl.abort(), 10000);
+  try { const r = await fetch(u, { signal: ctl ? ctl.signal : undefined, headers: { Accept: 'application/json' } }); if (!r.ok) throw new Error('HTTP ' + r.status); return await r.json(); }
+  finally { clearTimeout(tm); }
+}
+const dedupeParts = arr => arr.filter((x, i) => x && arr.findIndex(y => norm(y) === norm(x)) === i);
+const GEO_PROVIDERS = {
+  nominatim: async (q, cc, cfg) => {
+    const u = 'https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=' + (cfg.maxResults || 10) + '&accept-language=' + (cfg.language || 'en') +
+      '&q=' + encodeURIComponent(q) + (cc ? '&countrycodes=' + cc : '');
+    const js = await fetchJson(u);
+    return (Array.isArray(js) ? js : []).filter(r => r.category === 'place' || (r.category === 'boundary' && r.type === 'administrative')).map(r => {
+      const a = r.address || {};
+      let parts = String(r.display_name || '').split(',').map(s => s.trim()).filter(x => x && x !== a.postcode && !/^\d{3,}(?:[-\s]\d+)?$/.test(x));
+      const name = r.name || parts[0] || q;
+      if (parts.length && norm(parts[0]) === norm(name)) parts = parts.slice(1);
+      return { id: 'osm_' + String(r.osm_type || 'x')[0] + r.osm_id, name, path: dedupeParts(parts.filter(x => norm(x) !== norm(name))).join(', '), cc: String(a.country_code || '').toUpperCase(), kind: r.addresstype || r.type || 'place', lat: +r.lat, lng: +r.lon, src: 'OpenStreetMap' };
+    });
+  },
+  photon: async (q, cc, cfg) => {
+    const u = 'https://photon.komoot.io/api/?limit=' + (cfg.maxResults || 10) + '&lang=' + (['en', 'de', 'fr', 'it'].includes(cfg.language) ? cfg.language : 'en') + '&osm_tag=place&q=' + encodeURIComponent(q);
+    const js = await fetchJson(u);
+    return ((js && js.features) || []).filter(f => !cc || String(f.properties.countrycode || '').toLowerCase() === cc).map(f => {
+      const p = f.properties || {}, xy = (f.geometry && f.geometry.coordinates) || [];
+      return { id: 'osm_' + String(p.osm_type || 'x')[0].toLowerCase() + p.osm_id, name: p.name, path: dedupeParts([p.city, p.district, p.county, p.state, p.country].filter(x => x && norm(x) !== norm(p.name))).join(', '), cc: String(p.countrycode || '').toUpperCase(), kind: p.osm_value || 'place', lat: +xy[1], lng: +xy[0], src: 'OpenStreetMap' };
+    }).filter(g => g.name);
+  },
+  geonames: async (q, cc, cfg) => {
+    const u = 'https://secure.geonames.org/searchJSON?maxRows=' + (cfg.maxResults || 10) + '&style=FULL&lang=' + (cfg.language || 'en') + '&isNameRequired=true&featureClass=P&featureClass=A&username=' +
+      encodeURIComponent(cfg.geonamesUser) + '&q=' + encodeURIComponent(q) + (cc ? '&country=' + cc.toUpperCase() : '');
+    const js = await fetchJson(u); if (js && js.status) throw new Error(js.status.message || 'GeoNames error');
+    return ((js && js.geonames) || []).map(g => ({ id: 'gn_' + g.geonameId, name: g.name, path: dedupeParts([g.adminName3, g.adminName2, g.adminName1, g.countryName].filter(x => x && norm(x) !== norm(g.name))).join(', '), cc: String(g.countryCode || '').toUpperCase(), kind: g.fcodeName || 'place', lat: +g.lat, lng: +g.lng, src: 'GeoNames' }));
+  }
+};
+async function geoSearchOnline(raw) {
+  let text = String(raw || '').trim(), cc = '';
+  const m = text.match(/^([A-Za-z]{2}),\s*(.+)$/); if (m) { cc = m[1].toLowerCase(); text = m[2].trim(); } // feed style "IN, Munnar"
+  if (text.length < 2) return [];
+  const key = cc + '|' + text.toLowerCase(); if (GEO_CACHE[key]) return GEO_CACHE[key];
+  const cfg = APP_CONFIG.GEO_SEARCH || {};
+  const provs = (cfg.geonamesUser ? ['geonames'] : []).concat(cfg.providers || ['nominatim', 'photon']).filter(p => GEO_PROVIDERS[p]);
+  let lastErr = null, got = null;
+  for (const p of provs) {
+    try { const r = await GEO_PROVIDERS[p](text, cc, cfg); if (r.length) { got = r; break; } got = got || r; } catch (e) { lastErr = e; console.warn('geo search via ' + p + ' failed', e); }
+  }
+  if (!got && lastErr) throw lastErr;
+  GEO_CACHE[key] = got || []; return GEO_CACHE[key];
+}
+
+/* Two geos are "the same parent" when the name matches (incl. alternative names in brackets),
+   the country matches and the expected state/region appears in the candidate's chain.
+   So Kochi, Kerala ≠ Kochi, Japan and Kovalam, Kerala ≠ Kovalam, Tamil Nadu. */
+const gNorm = s => norm(s).replace(/\b(district|prefecture|province|region|county|division|taluk|tehsil|mandal|municipality|corporation)\b/g, ' ').replace(/\s+/g, ' ').trim();
+const geoParts = g => String(g.path || '').replace(/\([^)]*\)/g, '').split(',').map(s => s.trim()).filter(Boolean);
+function geoNameSet(g) {
+  const n = String(g.name || ''), out = [n.replace(/\s*\([^)]*\)\s*/g, ' ')];
+  const m = n.match(/\(([^)]+)\)/); if (m) out.push(m[1]);
+  return out.map(gNorm).filter(Boolean);
+}
+function geoMatch(a, b) {
+  if (!a || !b) return false;
+  if (a.id && a.id === b.id) return true;
+  const na = geoNameSet(a), nb = geoNameSet(b);
+  const nameOk = na.some(x => nb.some(y => x === y || (Math.min(x.length, y.length) >= 5 && simRatio(x, y) >= .88)));
+  if (!nameOk) return false;
+  const pa = geoParts(a), pb = geoParts(b);
+  const ctryA = pa.length ? pa[pa.length - 1] : a.name, ctryB = pb.length ? pb[pb.length - 1] : b.name;
+  const ccOk = a.cc && b.cc ? String(a.cc).toUpperCase() === String(b.cc).toUpperCase() : gNorm(ctryA) === gNorm(ctryB);
+  if (!ccOk) return false;
+  const stateOf = p => p.length >= 2 ? gNorm(p[p.length - 2]) : '';
+  const sa = stateOf(pa), sb = stateOf(pb);
+  if (!sa || !sb) return true;
+  return pb.map(gNorm).includes(sa) || pa.map(gNorm).includes(sb);
+}
+
 function openParent() {
   const c = curCase();
   $('#mParentBox').innerHTML = `<div class="modal-h"><h3>🔍 Search for a parent geo</h3><button class="x" data-close="mParent">✕</button></div>
-    <div class="modal-b"><input class="mselect" id="parentQ" value="${esc(c.feed.parentText || '')}" placeholder="Type a city, region or country code (e.g. Munnar, IN)">
-    <div style="font-size:12px;color:#6b7785;margin:8px 0">Pick the <b>most specific</b> geo where the property is located. Check the state and country!</div><div id="parentRes"></div></div>`;
-  const run = () => {
-    const toks = norm($('#parentQ').value).split(' ').filter(t => t.length >= 2);
-    const res = GEOS.map(g => {
-      const hay = norm(g.name + ' ' + g.path + ' ' + (g.cc || '')); let s = 0;
+    <div class="modal-b"><div class="pq-row"><input class="mselect" id="parentQ" value="${esc(c.feed.parentText || '')}" placeholder="Type a city, town or village — e.g. Edupuram"><button class="btn btn-pri" id="parentGo">Search</button></div>
+    <div class="pq-hint">Press <b>Enter</b> to search every city, town and village worldwide. Pick the <b>most specific</b> geo where the property is located — check the district, state and country!</div>
+    <div id="parentStatus" class="pq-status"></div><div id="parentRes"></div></div>`;
+  let online = null, seq = 0;
+  const localHits = () => {
+    const toks = norm($('#parentQ').value).split(' ').filter(t => t.length > 2); // skip 2-letter country codes like "IN"
+    return GEOS.filter(g => !String(g.id).startsWith('osm_') && !String(g.id).startsWith('gn_')).map(g => {
+      const hay = norm(g.name + ' ' + g.path); let s = 0;
       toks.forEach(t => { if (hay.split(' ').includes(t)) s += 2; else if (hay.includes(t)) s += 1; });
       return { g, s };
-    }).filter(x => x.s > 0).sort((a, b) => b.s - a.s).slice(0, 12);
-    $('#parentRes').innerHTML = res.length ? res.map(x => `<div class="parent-res" data-pick="${x.g.id}"><code>${x.g.id}</code><b>${esc(x.g.name)}</b><small>${esc(x.g.path)}</small></div>`).join('') : '<div style="color:#999;font-size:13px">No geos found. Try the city name only.</div>';
+    }).filter(x => x.s > 0).sort((a, b) => b.s - a.s).slice(0, 12).map(x => x.g);
   };
-  $('#parentQ').oninput = run; run();
-  openModal('mParent'); setTimeout(() => $('#parentQ').focus(), 50);
+  const item = (g, tag) => { PARENT_RESULTS[g.id] = g; return `<div class="parent-res" data-pick="${esc(g.id)}"><code>${esc(tag)}</code><b>${esc(g.name)}</b><small>${esc(g.path || '')}</small></div>`; };
+  const draw = () => {
+    const loc = localHits(), on = online || [];
+    const locOnly = loc.filter(g => !on.some(o => geoMatch(o, g)));
+    const html = on.map(g => item(g, g.kind || 'place')).join('') + locOnly.map(g => item(g, g.noParent ? 'neighbourhood' : 'saved geo')).join('');
+    $('#parentRes').innerHTML = html || `<div class="pq-empty">${online ? 'No places found. Check the spelling, or try the nearest town.' : 'Press Enter to search all places worldwide.'}</div>`;
+  };
+  const go = async () => {
+    const q = $('#parentQ').value.trim(); if (q.length < 2) return;
+    const my = ++seq; $('#parentStatus').innerHTML = '<span class="spin"></span> Searching all places…';
+    try { const r = await geoSearchOnline(q); if (my !== seq) return; online = r; $('#parentStatus').textContent = r.length ? `${r.length} place(s) found for “${q}”` : ''; }
+    catch (e) { if (my !== seq) return; online = []; $('#parentStatus').innerHTML = '<span style="color:#b26a00">⚠ Worldwide search is unavailable (offline or blocked network). Showing geos saved in the simulator only.</span>'; }
+    draw();
+  };
+  $('#parentQ').oninput = () => { online = null; $('#parentStatus').textContent = ''; draw(); };
+  $('#parentQ').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); go(); } };
+  $('#parentGo').onclick = go;
+  draw(); openModal('mParent');
+  setTimeout(() => { const i = $('#parentQ'); i.focus(); i.select(); }, 50);
+  if ($('#parentQ').value.trim()) go();
+}
+function registerGeo(id) {
+  if (GEO_BY_ID[id]) return GEO_BY_ID[id];
+  const g = PARENT_RESULTS[id]; if (!g) return null;
+  GEOS.push(g); GEO_BY_ID[id] = g; return g;
 }
 
 /* ---------------- modals ---------------- */
@@ -1005,36 +1195,48 @@ function openAudit(kind) {
   generic(kind === 'full' ? '🧾 AuditTrail – Full View' : '🧾 AuditTrail – Basic View', body);
 }
 
+/* ---------------- reject menu (red ⊗ button) ---------------- */
+const rejectReasons = () => Object.entries(REASONS).filter(([, r]) => r.d === 'reject');
+function toggleRejectMenu(btn) {
+  const m = $('#rejMenu');
+  if (!m.classList.contains('hidden')) return m.classList.add('hidden');
+  m.innerHTML = rejectReasons().map(([k, r]) => `<div data-rej-reason="${k}">${esc(r.label)}</div>`).join('');
+  const rc = btn.getBoundingClientRect();
+  m.style.right = Math.max(8, window.innerWidth - rc.right - 60) + 'px';
+  m.style.bottom = (window.innerHeight - rc.top + 6) + 'px';
+  m.classList.remove('hidden'); $('#toast').classList.remove('show');
+}
+function submitReject(reason) {
+  $('#rejMenu').classList.add('hidden');
+  const cs = S.cs; if (!cs) return;
+  submitCase({ decision: 'reject', reason, match: '', notes: String(cs.notes || cs.f.internal || '').trim() });
+}
+
 /* ---------------- decision ---------------- */
 function openDecision(pre) {
-  const c = curCase(), cs = S.cs;
+  const c = curCase(), cs = S.cs, L = listingFor(c);
   let sel = pre || '', matchVal = '';
   const draw = () => {
     const reasons = Object.entries(REASONS).filter(([, r]) => r.d === sel);
     $('#mDecisionBox').innerHTML = `<div class="modal-h"><h3>⚖️ Take action on request ${c.req}</h3><button class="x" data-close="mDecision">✕</button></div>
       <div class="modal-b">
-        <div class="dgrid">${Object.entries(DECISIONS).map(([k, d]) => `<button class="dopt ${sel === k ? 'sel' : ''}" data-dsel="${k}"><span class="ic" style="background:${d.color}">${d.icon}</span><span><b>${d.label}</b><small>${({ approve: 'New, real, open accommodation', alias: 'Already on Tripadvisor', reject: 'Closed / not lodging / no evidence', t1: 'Conflicting data', t2: 'Fraud / brand / legal / safety', defer: 'Not open yet' })[k]}</small></span></button>`).join('')}</div>
+        <div class="dgrid">${Object.entries(DECISIONS).map(([k, d]) => `<button class="dopt ${sel === k ? 'sel' : ''}" data-dsel="${k}"><span class="ic" style="background:${d.color}">${d.icon}</span><span><b>${d.label}</b><small>${({ approve: 'New, real, open accommodation', alias: 'Possible match / dupe on Tripadvisor', reject: 'Closed / not lodging / VR / cannot verify', t1: 'Conflicting data', t2: 'Fraud / brand / legal / safety', defer: 'Not open yet' })[k]}</small></span></button>`).join('')}</div>
         ${sel && !['approve', 'alias'].includes(sel) ? `<label class="mlabel">Reason *</label><select class="mselect" id="dReason"><option value="">— Select reason —</option>${reasons.map(([k, r]) => `<option value="${k}">${esc(r.label)}</option>`).join('')}</select>` : ''}
-        ${sel === 'alias' ? `<label class="mlabel">Existing Tripadvisor listing *</label><input class="mselect" id="dMatch" value="${esc(matchVal)}" placeholder="Paste the Tripadvisor URL (…-d1234567-…) or the location ID"><div style="font-size:11.5px;color:#6b7785;margin-top:4px">Find it on tripadvisor.com in Chrome, open the listing and copy the address bar.</div>` : ''}
-        ${sel ? `<label class="mlabel">Agent notes ${sel === 'approve' ? '(optional)' : '* (min 10 characters)'} <span style="font-weight:500;color:#8a96a3">— pre-filled from your Internal Comment</span></label><textarea class="mtext" id="dNotes" placeholder="What evidence did you rely on? (links, what you saw)">${esc(cs.notes || cs.f.internal)}</textarea>` : '<p style="color:#6b7785;font-size:13px;margin:14px 0 0">Select an action above.</p>'}
+        ${sel === 'alias' ? (L ? `<label class="mlabel">Existing listing the request is applied to</label><div class="pm-sum"><code>${esc(L.id)}</code> <b>${esc(L.name || '')}</b> · ${esc(geoLabel(L.parent))} <a href="${esc(L.taUrl)}" target="_blank" rel="noopener">View ↗</a>${cs.link === 'new' ? '<div style="color:#b26a00;font-size:12px;margin-top:4px">You marked this listing “Not match”. Submitting Alias applies the request to it anyway.</div>' : ''}<div style="font-size:12px;color:#6b7785;margin-top:4px">The values you edited on the page are saved to this listing, and the feed name is kept as an alias.</div></div>`
+          : `<label class="mlabel">Existing Tripadvisor listing (no possible match was shown)</label><input class="mselect" id="dMatch" value="${esc(matchVal)}" placeholder="Paste the Tripadvisor link or location ID of the listing you found"><div style="font-size:11.5px;color:#6b7785;margin-top:4px">Only needed when LMT showed no possible match and you found the dupe on tripadvisor.com yourself.</div>`) : ''}
+        ${sel ? `<label class="mlabel">Agent notes (optional) <span style="font-weight:500;color:#8a96a3">— pre-filled from your Internal Comment</span></label><textarea class="mtext" id="dNotes" placeholder="What evidence did you rely on? (links, what you saw)">${esc(cs.notes || cs.f.internal)}</textarea>` : '<p style="color:#6b7785;font-size:13px;margin:14px 0 0">Select an action above.</p>'}
         <div class="err-msg" id="dErr" style="margin-top:8px"></div>
       </div>
       <div class="modal-f"><button class="btn btn-ghost" data-close="mDecision">Cancel</button><button class="btn btn-pri" id="dSubmit" ${sel ? '' : 'disabled'}>Submit decision</button></div>`;
     $$('[data-dsel]').forEach(b => b.onclick = () => { cs.notes = ($('#dNotes') || {}).value || cs.notes; matchVal = ($('#dMatch') || {}).value || matchVal; sel = b.dataset.dsel; draw(); });
     const sb = $('#dSubmit'); if (sb) sb.onclick = () => {
       const reason = ($('#dReason') || {}).value || (sel === 'approve' ? 'new_verified' : sel === 'alias' ? 'duplicate' : '');
-      const match = (($('#dMatch') || {}).value || '').trim();
+      const match = sel === 'alias' && L ? L.id : (($('#dMatch') || {}).value || '').trim();
       const notes = ($('#dNotes') || {}).value || '';
       const err = msg => { $('#dErr').textContent = msg; };
       if (!['approve', 'alias'].includes(sel) && !reason) return err('Select a reason.');
-      if (sel === 'alias' && !taId(match)) return err('Paste the Tripadvisor listing URL (it contains -d1234567-) or the location ID.');
-      if (sel !== 'approve' && notes.trim().length < 10) return err('Add a short note (min 10 characters) explaining your evidence.');
-      if (sel === 'approve' || sel === 'defer') {
-        const missing = [];
-        if (!cs.f.name.trim()) missing.push('Name'); if (!cs.f.parent) missing.push('Parent'); if (!cs.f.type) missing.push('Accommodation Type');
-        Object.entries(REQ_SECTIONS).forEach(([k, l]) => { if (!cs.applied[k]) missing.push(l + (isHiddenSec(k) ? ' (hidden – click Show All Fields)' : ' (not applied)')); });
-        if (missing.length) return err('Cannot ' + (sel === 'approve' ? 'create' : 'defer') + ' – missing: ' + missing.join(', '));
-      }
+      if (sel === 'alias' && !match) return err('Paste the Tripadvisor link of the listing you found.');
+      // v2.2: no other blocking checks — Apply is optional and empty/unapplied fields are simply scored.
       closeModal('mDecision');
       submitCase({ decision: sel, reason, match, notes: notes.trim() });
     };
@@ -1056,7 +1258,8 @@ function submitCase(dec) {
     qNo: S.idx + 1, caseId: c.id, hotel: c.ans.name ? String(first(c.ans.name)) : c.feed.name, feedName: c.feed.name,
     expectedDecision: c.ans.decision, decision: dec.decision, decisionOk: sc.decisionOk,
     expectedReason: [].concat(c.ans.reason).join('|'), reason: dec.reason, reasonOk: sc.reasonOk,
-    expectedMatch: c.ans.match || '', match: dec.match, matchOk: sc.matchOk, fieldsPct: Math.round(sc.fieldsPct * 100), score: sc.score,
+    expectedMatch: (() => { const L = listingFor(c); return c.ans.decision === 'alias' ? (L && L.isMatch ? L.id + ' · ' + (L.name || '') : (c.ans.match || '')) : ''; })(),
+    match: (() => { const L = listingFor(c); return dec.decision === 'alias' && L && dec.match === L.id ? L.id + ' · ' + (L.name || '') : dec.match; })(), matchOk: sc.matchOk, fieldsPct: Math.round(sc.fieldsPct * 100), score: sc.score,
     xp, speed, streakB, timeSec, critical: sc.critical, notes: dec.notes, mode: sc.mode,
     showAll: cs.showAllUsed, showAllSec: cs.showAllSec, internal: (cs.f.internal || '').trim(),
     aliases: cs.aliases.filter(a => a.name.trim()).map(a => a.name.trim() + (a.searchable ? ' (searchable)' : '')).join(' ; '),
@@ -1071,20 +1274,20 @@ function feedbackHtml(r) {
   const D = DECISIONS, color = r.score >= 80 ? 'var(--ok)' : r.score >= 50 ? '#b97a00' : 'var(--bad)';
   const verdict = r.critical ? '🚨 Critical error' : r.score >= 95 ? '🏆 Perfect work!' : r.score >= 80 ? '✅ Great job' : r.score >= 50 ? '⚠️ Partly correct' : '❌ Needs review';
   const reasonLbl = k => (REASONS[k] ? REASONS[k].label : (k || '—'));
-  const showFields = r.mode === 'fields' || !r.decisionOk;
+  const showFields = r.mode === 'fields' || r.mode === 'match' || !r.decisionOk;
   return `<div class="fb-head"><div class="fb-score" style="color:${color}">${r.score}<small>/100</small></div><div class="fb-verdict">${verdict}</div>
       <div class="fb-xp">+${r.xp} XP${r.speed ? ` · ⚡ +${r.speed}` : ''}${r.streakB ? ` · 🔥 +${r.streakB}` : ''}</div></div>
     <div class="modal-b">
       <table class="fb-tbl"><tr><th style="width:150px"></th><th>Your answer</th><th>Correct answer</th><th style="width:60px"></th></tr>
         <tr><td><b>Action</b></td><td>${D[r.decision].icon} ${esc(D[r.decision].label)}</td><td>${D[r.expectedDecision].icon} ${esc(D[r.expectedDecision].label)}</td><td class="${r.decisionOk ? 'ok-c' : 'bad-c'}">${r.decisionOk ? '✔ 30' : '✖ 0'}</td></tr>
         <tr><td><b>Reason</b></td><td>${esc(reasonLbl(r.reason))}</td><td>${esc(r.expectedReason.split('|').map(reasonLbl).join(' / '))}</td><td class="${r.reasonOk ? 'ok-c' : 'bad-c'}">${r.reasonOk ? '✔ 10' : '✖ 0'}</td></tr>
-        ${r.expectedDecision === 'alias' ? `<tr><td><b>Tripadvisor listing</b></td><td style="word-break:break-all">${esc(r.match || '—')}</td><td style="word-break:break-all">${esc(r.expectedMatch || 'The existing Tripadvisor listing link for this property')}</td><td class="${r.matchOk ? 'ok-c' : 'bad-c'}">${r.matchOk ? '✔' : '✖'}</td></tr>` : ''}
-        <tr><td><b>Data capture</b></td><td colspan="2">${r.mode === 'match' ? 'Scored on the existing Tripadvisor listing you matched' : r.mode === 'decision' && r.decisionOk ? 'Earned by the correct action' : r.fieldsPct + '% field accuracy'}</td><td></td></tr>
+        ${r.expectedDecision === 'alias' || r.decision === 'alias' ? `<tr><td><b>Existing listing</b></td><td style="word-break:break-all">${esc(r.decision === 'alias' ? (r.match || '—') : 'Not applied — you created a new listing')}</td><td style="word-break:break-all">${esc(r.expectedDecision === 'alias' ? (r.expectedMatch || 'The existing Tripadvisor listing') : 'None — this is a new property')}</td><td class="${r.matchOk ? 'ok-c' : 'bad-c'}">${r.matchOk ? '✔' : '✖'}</td></tr>` : ''}
+        <tr><td><b>Data capture</b></td><td colspan="2">${r.mode === 'match' ? (r.matchOk ? r.fieldsPct + '% accuracy on the existing listing after your edits' : 'Not scored — the request was not applied to the right listing') : r.mode === 'decision' && r.decisionOk ? 'Earned by the correct action' : r.fieldsPct + '% field accuracy'}</td><td></td></tr>
       </table>
-      ${r.critical ? `<div class="crit">🚨 ${r.decision === 'approve' ? 'You approved a listing that should not be created.' : 'A fraud/legal case was rejected instead of escalated — the risk is never investigated.'} This scores 0.</div>` : ''}
+      ${r.critical ? `<div class="crit">🚨 ${r.decision === 'approve' ? 'You approved a listing that should not be created.' : r.decision === 'alias' ? 'You applied this request to a different property\'s listing — that overwrites a real listing with the wrong data.' : 'A fraud/legal case was rejected instead of escalated — the risk is never investigated.'} This scores 0.</div>` : ''}
       ${showFields ? `<h4 style="margin:16px 0 4px">Field-by-field review</h4><table class="fb-tbl"><tr><th>Field</th><th>You entered</th><th>Expected</th><th>Result</th></tr>
         ${r.fields.map(f => `<tr><td>${esc(f.label)}</td><td>${esc(f.given)}</td><td>${esc(f.exp)}</td><td class="${f.status === 'ok' ? 'ok-c' : f.status === 'partial' ? 'mid-c' : 'bad-c'}">${f.status === 'ok' ? '✔' : f.status === 'partial' ? '◐' : '✖'} <span style="font-weight:500;color:#555">${esc(f.note || '')}</span></td></tr>`).join('')}</table>` : ''}
-      <div class="${r.showAll ? 'habit ok' : 'habit bad'}">👁 <b>Show All Fields:</b> ${r.showAll ? `used${r.showAllSec != null ? ' after ' + fmtTime(r.showAllSec) : ''} ✔` : 'not used ✖ — Contact Details, Description, Internal Comment and Geo Coding stayed hidden. On the live LMT, click it first on every request.'}${r.internal ? '' : ' · <span style="color:#9a6a00">No Internal Comment written.</span>'}</div>
+      <div class="${r.showAll ? 'habit ok' : 'habit bad'}">👁 <b>Show All Fields:</b> ${r.showAll ? `used${r.showAllSec != null ? ' after ' + fmtTime(r.showAllSec) : ''} ✔` : 'not used ✖ — Phone, Fax, Email, Description, Internal Comment and Geo Coding stayed hidden. On the live LMT, click it first on every request.'}${r.internal ? '' : ' · <span style="color:#9a6a00">No Internal Comment written.</span>'}</div>
       <div class="tipbox">🎓 <b>Coach's note:</b> ${esc(r.tip)}</div>
     </div>`;
 }
@@ -1170,7 +1373,7 @@ function renderResults(a, badges, levelUp) {
       <table class="rtbl"><thead><tr><th>#</th><th>Property</th><th>Your action</th><th>Correct action</th><th>Reason</th><th>Data</th><th>Score</th><th>Time</th><th>XP</th><th></th></tr></thead><tbody>
       ${rs.map((r, i) => `<tr class="clk" data-review="${i}"><td>${r.qNo}</td><td><b>${esc(r.hotel)}</b><div style="font-size:11px;color:#888">${esc(r.caseId)}</div></td>
         <td>${D[r.decision].icon} ${D[r.decision].short}</td><td>${D[r.expectedDecision].icon} ${D[r.expectedDecision].short} ${r.decisionOk ? '<span class="ok-c">✔</span>' : '<span class="bad-c">✖</span>'}</td>
-        <td>${r.reasonOk ? '<span class="ok-c">✔</span>' : '<span class="bad-c">✖</span>'}</td><td>${r.mode === 'fields' || !r.decisionOk ? r.fieldsPct + '%' : '—'}</td>
+        <td>${r.reasonOk ? '<span class="ok-c">✔</span>' : '<span class="bad-c">✖</span>'}</td><td>${r.mode !== 'decision' || !r.decisionOk ? r.fieldsPct + '%' : '—'}</td>
         <td><b style="color:${r.score >= 80 ? 'var(--ok)' : r.score >= 50 ? '#b97a00' : 'var(--bad)'}">${r.score}</b>${r.critical ? ' 🚨' : ''}</td><td>${fmtTime(r.timeSec)}</td><td>${r.xp}</td><td><button class="btn btn-ghost btn-sm">Review</button></td></tr>`).join('')}
       </tbody></table>
       <div class="sync-line" id="syncLine">Saving results…</div></div>
@@ -1248,7 +1451,10 @@ function bindGame() {
     const k = t.dataset.f; if (!k) return;
     if (['provAttr', 'provExp', 'internal'].includes(k)) { cs.applied.internal = false; refreshApplyBtn('internal'); }
     S.cs.f[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
-    if (['name', 'type'].includes(k)) e.target.classList.toggle('invalid', !e.target.value);
+    if (['name', 'type'].includes(k)) {
+      e.target.classList.toggle('invalid', !e.target.value);
+      const m = pane.querySelector(`[data-msg="${k}"]`); if (m) m.textContent = e.target.value ? '' : (k === 'name' ? 'Please provide a name' : 'Please select an accommodation type');
+    }
     if (k === 'lat' || k === 'lng') { S.cs.applied.geo = false; refreshApplyBtn('geo'); }
   });
   pane.addEventListener('change', e => {
@@ -1266,7 +1472,7 @@ function bindGame() {
     else if (d.apply) applySection(d.apply);
     else if (d.lock) { cs.locks[d.lock] = !cs.locks[d.lock]; t.classList.toggle('on'); }
     else if (d.parent) openParent();
-    else if (d.pre) { cs.pre = d.pre; updateEndInfo(); toast('Pre-selected: ' + DECISIONS[d.pre].label + (d.pre === 'alias' ? ' — find the listing on tripadvisor.com and paste its link when you take action' : ' — finish the page, then Take Action'), 3600); }
+    else if (d.pre) { if (d.pre === 'alias') linkAsAlias(); else linkAsNew(); }
     else if (d.openprov) openProvider();
     else if (d.thumb) { cs.f.thumb = d.thumb; $$('.thumb').forEach(x => x.classList.toggle('sel', x === t)); $('#thumbTxt').textContent = 'Selected: ' + d.thumb; }
     else if (d.inert) toast('Linked locations are not used in this training');
@@ -1297,7 +1503,7 @@ function bindGame() {
   pane.addEventListener('keydown', e => { if (e.target.id === 'alNew' && e.key === 'Enter') { e.preventDefault(); const b = pane.querySelector('[data-aladd]'); if (b) b.click(); } });
   $('#btnTakeAction').onclick = () => openDecision(S.cs.pre || '');
   $('#hudExit').onclick = () => { generic('Exit mission?', '<p>Your progress on this day will be lost. Results are only saved after the last case.</p>', '<button class="btn btn-ghost" data-close="mGeneric">Stay</button><button class="btn btn-danger" id="exitYes">Exit to login</button>'); $('#exitYes').onclick = () => { closeModal('mGeneric'); clearInterval(S.timer); show('v-login'); }; };
-  $('#btnNoMatch').onclick = () => { S.cs.pre = 'approve'; updateEndInfo(); toast('Marked: No match exists on Tripadvisor → create new. Make sure you searched tripadvisor.com first!', 3600); };
+  $('#btnNoMatch').onclick = linkAsNew;
   $('#btnHelpful').onclick = () => $('#helpfulMenu').classList.toggle('hidden');
   renderHelpful();
   $('#helpfulMenu').addEventListener('click', e => { const t = e.target.closest('[data-link]'); if (t) { $('#helpfulMenu').classList.add('hidden'); helpfulLink(+t.dataset.link); } });
@@ -1324,24 +1530,30 @@ function bindGame() {
       $('#emSend').onclick = () => { S.cs.emails++; closeModal('mGeneric'); toast('✉ Email queued (simulation)'); };
       return;
     }
+    if (a === 'reject') return toggleRejectMenu(b);
+    if (a === 'approve') return openDecision(S.cs.pre === 'alias' ? 'alias' : 'approve');
     openDecision(a === 'escalate' ? 't1' : a);
   });
+  // Reject menu (same reasons and order as the live LMT)
+  $('#rejMenu').addEventListener('click', e => { const t = e.target.closest('[data-rej-reason]'); if (t) submitReject(t.dataset.rejReason); });
+  document.addEventListener('mousedown', e => { const m = $('#rejMenu'); if (m && !m.classList.contains('hidden') && !e.target.closest('#rejMenu') && !e.target.closest('.abtn[data-act="reject"]')) m.classList.add('hidden'); });
   $$('.lbtn').forEach(b => b.onclick = () => {
     const k = b.dataset.lb;
     if (k === 'B') jumpTo('sec-basic');
-    else if (k === 'C') { if (isHiddenSec('contact')) return toast('👁 Contact Details is hidden — click Show All Fields first', 2600); jumpTo('sec-contact'); }
+    else if (k === 'C') jumpTo('sec-contact');
     else if (k === 'L') { const f = S.cs.f; generic('📄 Location summary (your current values)', `<table class="fb-tbl">${[['Name', f.name], ['Brand', f.brand], ['Street One', f.street], ['Street Two', f.street2], ['Postal', f.postal], ['Parent', geoLabel(f.parent)], ['Phone', f.phone], ['Email', f.email], ['URL', f.url], ['Type', f.type], ['Rooms', f.rooms], ['Floors', f.floors], ['Opening', f.opening], ['All-inclusive', f.allIncl ? 'Yes' : 'No'], ['Lat/Lng', f.lat + ', ' + f.lng]].map(([l, v]) => `<tr><td style="width:150px"><b>${l}</b></td><td>${esc(v || '—')}</td></tr>`).join('')}</table>`); }
     else if (k === 'LN') { generic('📝 Location notes', `<textarea class="mtext" id="lnText" style="min-height:140px" placeholder="Your research notes and links — these pre-fill the notes in the action dialog.">${esc(S.cs.notes)}</textarea>`, '<button class="btn btn-pri" id="lnSave">Save notes</button>'); $('#lnSave').onclick = () => { S.cs.notes = $('#lnText').value; closeModal('mGeneric'); toast('📝 Notes saved'); }; }
   });
   document.addEventListener('click', e => {
     const c = e.target.closest('[data-close]'); if (c) closeModal(c.dataset.close);
     const p = e.target.closest('[data-pick]'); if (p && S.cs) {
+      registerGeo(p.dataset.pick);
       S.cs.f.parent = p.dataset.pick; closeModal('mParent');
       const ps = $('#parentShow'); if (ps) { ps.value = geoLabel(p.dataset.pick); ps.classList.add('ok'); const m = document.querySelector('#sec-basic [data-msg="parent"]'); if (m) m.textContent = ''; }
       toast('Parent selected: ' + geoLabel(p.dataset.pick), 2000);
     }
   });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') ['mParent', 'mGeneric', 'mDecision'].forEach(closeModal); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { ['mParent', 'mGeneric', 'mDecision'].forEach(closeModal); $('#rejMenu').classList.add('hidden'); } });
   window.addEventListener('beforeunload', e => { if ($('#v-game').classList.contains('active')) { e.preventDefault(); e.returnValue = ''; } });
 }
 
@@ -1521,7 +1733,7 @@ function qbForm(q) {
   const r = q ? questionToRow(q) : { id: 'C-' + String(CFG.questions.length + 1).padStart(3, '0'), day: 6, q: 1, active: 'Y', 'ans.decision': 'Approve' };
   if (q && !q.custom) r.id = q.id; // editing a built-in creates a trainer copy with the same ID (replaces it)
   const groups = [['Question', ['id', 'day', 'q', 'active']], ['What the provider feed sends (Requested Change column)', TPL.filter(t => t[0].startsWith('feed.') || t[0] === 'providerUrl' || t[0] === 'amen').map(t => t[0])],
-    ['Correct answer', ['ans.decision', 'ans.reason', 'ans.match', 'ans.name', 'ans.brand', 'ans.street', 'ans.street2', 'ans.postal', 'parentLabel', 'ans.phone', 'ans.email', 'ans.url', 'ans.type', 'ans.rooms', 'ans.floors', 'ans.opening', 'ans.allIncl', 'ans.lat', 'ans.lng', 'geoTol']],
+    ['Correct answer', ['ans.decision', 'ans.reason', 'ans.match', 'listingNow', 'decoy', 'ans.name', 'ans.brand', 'ans.street', 'ans.street2', 'ans.postal', 'parentLabel', 'ans.phone', 'ans.email', 'ans.url', 'ans.type', 'ans.rooms', 'ans.floors', 'ans.opening', 'ans.allIncl', 'ans.lat', 'ans.lng', 'geoTol']],
     ['Internal LMT evidence & coaching', ['votes', 'owners', 'audit', 'tip']]];
   const T = Object.fromEntries(TPL.map(t => [t[0], t]));
   const input = k => {
@@ -1563,7 +1775,8 @@ const TEMPLATE_GUIDE = [
   '',
   'CHOOSING HOTELS',
   '• Use REAL properties that agents can find on Google / Google Maps / the official site / social pages, and that are NOT yet on Tripadvisor (search tripadvisor.com first).',
-  '• For an Alias (duplicate) case, use a property that IS on Tripadvisor and paste its Tripadvisor URL in "Existing Tripadvisor Listing".',
+  '• For an Alias (possible match / dupe) case, use a property that IS on Tripadvisor and paste its Tripadvisor URL in "Existing Tripadvisor Listing". LMT shows that listing as the possible match with its current values; to make the agent edit something, put the outdated value in "Existing Listing – Current Values" (e.g. type=Hotel).',
+  '• To practise "Not match, create new", give a new-property case a "Look-alike Listing" — a similar name in another place.',
   '• For fraud / unverifiable practice, use an invented name and put the evidence in Feed Description, Location Votes, Owners or Audit notes. Never accuse a real business of fraud.',
   '• Re-check your answers a few days before each wave — real phone numbers and websites change.',
   '',
@@ -1583,12 +1796,13 @@ const TEMPLATE_GUIDE = [
   '',
   'ACTIONS AND REASONS (see the Lists sheet)',
   '• Approve (reason optional) · Alias (reason optional) · Reject · Tier 1 · Tier 2 · Defer — Reject/Tier 1/Tier 2/Defer need a reason from the Lists sheet.',
+  '• Reject reasons are the live LMT list: Page down · Vacation Rental · Single unit property · Cannot verify · Property closed · Property removed from TA · Former name · More than 7 night stay required · Not open to public (restricted access) · Open less than 12 consecutive weeks · Not stationary (cruise) · Incorrect property type (not an accommodation).',
   '• Several accepted reasons: separate with " | ".',
   '',
   'SCORING (per case, 100 points)',
   '• Correct action 30 · correct reason 10 · data capture 60 (weighted by field).',
-  '• Alias cases score the Tripadvisor link instead of the fields. Reject / Tier 1 / Tier 2 cases score the action only.',
-  '• Approving a case whose answer is Alias / Reject / Tier 1 / Tier 2 = critical error (0).',
+  '• Alias cases score the existing listing\'s values after the agent\'s edits. Reject / Tier 1 / Tier 2 cases score the action only.',
+  '• Approving a case whose answer is Alias / Reject / Tier 1 / Tier 2, or choosing Alias on a new property (merging it into a look-alike) = critical error (0).',
   '',
   'EVIDENCE COLUMNS (shown inside LMT, not on the internet)',
   '• Location Votes: separate votes with " ;; " — e.g.  Closed: gate locked, sign says closed ;; Closed: now a school',
@@ -1606,7 +1820,10 @@ const TEMPLATE_EXAMPLES = [
     tip: 'Feed was ALL CAPS. The phone is not in the feed — the agent finds it online and enters it as +91. No website or email exists, so both stay blank.' },
   { id: 'EXAMPLE-2', day: 6, q: 2, active: 'Y', 'feed.name': 'Paradise Beach Villas', 'feed.parentText': 'IN, Goa', 'feed.lat': 15.55, 'feed.lng': 73.75, 'feed.desc': 'Pay 100% advance by UPI to confirm. No cash at check-in.',
     'ans.decision': 'Tier 2', 'ans.reason': 'Suspected fraud / scam indicators', parentLabel: 'Candolim, Bardez, North Goa District, Goa, India', 'ans.lat': 15.518, 'ans.lng': 73.762,
-    votes: 'Scam: paid advance, property does not exist ;; Scam: number switched off after payment', tip: 'Advance payment to a personal account plus scam reports = Tier 2, never a simple reject.' }
+    votes: 'Scam: paid advance, property does not exist ;; Scam: number switched off after payment', tip: 'Advance payment to a personal account plus scam reports = Tier 2, never a simple reject.' },
+  { id: 'EXAMPLE-3', day: 6, q: 3, active: 'Y', 'feed.name': 'Kumarakom Lake Resort & Ayurveda Spa', 'feed.parentText': 'IN, Kumarakom', 'feed.lat': 9.6176, 'feed.lng': 76.4278,
+    'ans.decision': 'Alias', 'ans.match': 'https://www.tripadvisor.com/Hotel_Review-d302893', listingNow: 'type=Hotel', 'ans.name': 'Kumarakom Lake Resort', parentLabel: 'Kumarakom, Kottayam District, Kerala, India',
+    'ans.type': 'Resort', 'ans.lat': 9.6176, 'ans.lng': 76.4278, tip: 'The possible match is the existing listing → Add name as alias. The listing says Hotel but it is a resort → edit the type as per sources.' }
 ];
 async function loadSheetJS() {
   if (window.XLSX) return true;

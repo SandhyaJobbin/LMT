@@ -1,4 +1,4 @@
-# LMT Places Simulator v2.1
+# LMT Places Simulator v2.3
 
 Hands-on Location Tool (LMT) listing practice for Tripadvisor Places agents — Sutherland.
 

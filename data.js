@@ -7,7 +7,12 @@
      Google Maps, the Kerala Tourism page and the property's own site.
      Spot-check on tripadvisor.com before each wave — if one has since
      been listed, switch it Off or change it to an Alias case.
-   • 5 "Alias" cases are well-known hotels already on Tripadvisor.
+   • 5 "Alias" cases are well-known hotels already on Tripadvisor. Each has a
+     `listing` = the existing Tripadvisor listing LMT shows as the possible
+     match (real location IDs). Values in it that differ from `ans` (e.g. a
+     missing Brand, Type "Hotel" for a resort) are what the agent must edit.
+   • 3 Approve cases also carry a `listing` that is NOT the same property
+     (a look-alike) — the agent must click "Not match, create new".
    • 5 "Not an accommodation" cases are real non-lodging places.
    • 10 cases (Unverifiable / Tier 2) use INVENTED names on purpose —
      nothing exists online, and all evidence is inside LMT. No real
@@ -47,19 +52,29 @@ const PROVIDER_ATTRIBUTIONS = ['Hopper', 'Booking.com', 'Expedia', 'Agoda', 'Own
 
 const DECISIONS = {
   approve: { label: 'Approve – Create New', short: 'Approve', color: '#1f7a3a', icon: '✔' },
-  alias:   { label: 'Add Name as Alias (Match Exists)', short: 'Alias', color: '#0b5d3b', icon: '＋' },
+  alias:   { label: 'Add Name as Alias – Apply to Existing Listing', short: 'Alias', color: '#0b5d3b', icon: '＋' },
   reject:  { label: 'Reject / Close Request', short: 'Reject', color: '#d6322b', icon: '✖' },
   t1:      { label: 'Escalate to Tier 1', short: 'Tier 1', color: '#7b4fd6', icon: '⬆' },
   t2:      { label: 'Escalate to Tier 2', short: 'Tier 2', color: '#5a2ca0', icon: '⏫' },
   defer:   { label: 'Defer – Keep In Progress', short: 'Defer', color: '#2a9fd6', icon: '⏱' }
 };
 
+/* Reject reasons are listed exactly as in the live LMT reject menu, in the same order. */
 const REASONS = {
   new_verified:        { d: 'approve', label: 'New property – verified across sources' },
-  duplicate:           { d: 'alias',   label: 'Existing Tripadvisor listing – add feed name as alias' },
-  closed:              { d: 'reject',  label: 'Permanently closed' },
-  not_accommodation:   { d: 'reject',  label: 'Not an accommodation' },
-  unverifiable:        { d: 'reject',  label: 'Unverifiable – no evidence the property exists' },
+  duplicate:           { d: 'alias',   label: 'Possible match / dupe – request applied to the existing listing' },
+  page_down:           { d: 'reject',  label: 'Page down' },
+  vacation_rental:     { d: 'reject',  label: 'Vacation Rental' },
+  single_unit:         { d: 'reject',  label: 'Single unit property' },
+  unverifiable:        { d: 'reject',  label: 'Cannot verify' },
+  closed:              { d: 'reject',  label: 'Property closed' },
+  removed_ta:          { d: 'reject',  label: 'Property removed from TA' },
+  former_name:         { d: 'reject',  label: 'Former name' },
+  min_stay:            { d: 'reject',  label: 'More than 7 night stay required' },
+  restricted:          { d: 'reject',  label: 'Not open to public (restricted access)' },
+  seasonal:            { d: 'reject',  label: 'Open less than 12 consecutive weeks' },
+  not_stationary:      { d: 'reject',  label: 'Not stationary (cruise)' },
+  not_accommodation:   { d: 'reject',  label: 'Incorrect property type (not an accommodation)' },
   conflict:            { d: 't1',      label: 'Conflicting data between sources' },
   location_unconfirmed:{ d: 't1',      label: 'Exact location cannot be confirmed' },
   fraud:               { d: 't2',      label: 'Suspected fraud / scam indicators' },
@@ -67,6 +82,11 @@ const REASONS = {
   safety_legal:        { d: 't2',      label: 'Safety or legal concern' },
   preopening:          { d: 'defer',   label: 'Not open yet (pre-opening / under construction)' },
   awaiting_info:       { d: 'defer',   label: 'Awaiting more information from provider' }
+};
+/* Old reason wording (v2.0–v2.2 templates and exports) still uploads correctly */
+const LEGACY_REASONS = {
+  'unverifiable – no evidence the property exists': 'unverifiable', 'unverifiable': 'unverifiable', 'permanently closed': 'closed',
+  'not an accommodation': 'not_accommodation', 'existing tripadvisor listing – add feed name as alias': 'duplicate'
 };
 
 /* ---------- Parent geos (real places; IDs are simulator IDs) ---------- */
@@ -105,6 +125,7 @@ const GEOS = [
   { id: 'g2032', name: 'Cherai', path: 'Vypin Island, Ernakulam District, Kerala, India', cc: 'IN' },
   { id: 'g2033', name: 'Mumbai (Bombay)', path: 'Maharashtra, India', cc: 'IN' },
   { id: 'g2034', name: 'Singapore', path: 'Singapore', cc: 'SG' },
+  { id: 'g2037', name: 'Kodaikanal', path: 'Dindigul District, Tamil Nadu, India', cc: 'IN' },
   { id: 'g2035', name: 'Chithirapuram', path: 'Munnar, Idukki District, Kerala, India (neighbourhood – not a parent geo)', cc: 'IN', noParent: true },
   { id: 'g2036', name: 'Fort Kochi', path: 'Kochi, Ernakulam District, Kerala, India (neighbourhood – not a parent geo)', cc: 'IN', noParent: true }
 ];
@@ -124,7 +145,8 @@ const CASES = [
   ans: { decision: 'approve', reason: 'new_verified', name: 'Green Horizon Homestay', street: ['Fort Nagar, Fort Kochi', 'Fort Nagar'], postal: '682001', parent: 'g2006',
     phone: '+91 88910 77232', email: 'greenhorizonstay@gmail.com', url: ['http://www.greenhorizonstay.com', ''], type: 'Guest House', lat: 9.966791, lng: 76.244514 },
   geoTol: 250,
-  tip: 'The feed pin landed in Kochi, JAPAN. Always check the country when you pick a parent. Fort Kochi is a neighbourhood of Kochi (Cochin), Kerala.' },
+  listing: { id: 'd9182734', name: 'Green Horizon Resort', street: 'Observatory Road', postal: '624101', parent: 'g2037', type: 'Resort', lat: 10.2381, lng: 77.4892 },
+  tip: 'LMT offered "Green Horizon Resort" as a possible match — but it is in Kodaikanal, Tamil Nadu, a different property. Click Not match, create new. The feed pin landed in Kochi, JAPAN: always check the country when you pick a parent. Fort Kochi is a neighbourhood of Kochi (Cochin), Kerala.' },
 
 { id: 'D1-03', source: 'https://www.keralatourism.org/homestays/kerala-spices-homestay/8592', day: 1, q: 3, req: 121553418,
   feed: { name: 'Kerala Spices Homestay Thekkady', street: 'Kollaparambil House', postal: '685509', parentText: 'IN, Thekkady', lat: 9.6040, lng: 77.1680 },
@@ -163,19 +185,20 @@ const CASES = [
 
 { id: 'D1-08', day: 1, q: 8, req: 121553489,
   feed: { name: 'Kumarakom Lake Resort & Ayurveda Spa', street: 'Kumarakom North', postal: '686563', parentText: 'IN, Kumarakom', lat: 9.6176, lng: 76.4278 },
-  ans: { decision: 'alias', reason: 'duplicate', name: 'Kumarakom Lake Resort', parent: 'g2013', type: 'Resort', lat: 9.6176, lng: 76.4278 },
-  tip: 'A famous resort that has been on Tripadvisor for years. The feed just added words to the name. Search tripadvisor.com, open the existing listing, paste its link and add the feed name as an alias — never create a duplicate.' },
+  listing: { id: 'd302893', name: 'Kumarakom Lake Resort', street: 'Kumarakom North', postal: '686563', parent: 'g2013', type: 'Resort', lat: 9.6176, lng: 76.4278 },
+  ans: { decision: 'alias', reason: 'duplicate', match: 'd302893', name: 'Kumarakom Lake Resort', parent: 'g2013', type: 'Resort', lat: 9.6176, lng: 76.4278 },
+  tip: 'LMT showed the existing listing (d302893) as a possible match — same resort, same address. Click Add name as alias to apply the request to it, never create a duplicate. Keep the listing name: the feed only added "& Ayurveda Spa", so ✖ that requested change.' },
 
 { id: 'D1-09', day: 1, q: 9, req: 121553502,
   feed: { name: 'Mattancherry Palace Heritage Stay', street: 'Palace Road, Mattancherry', postal: '682002', parentText: 'IN, Kochi', lat: 9.9583, lng: 76.2593 },
   ans: { decision: 'reject', reason: 'not_accommodation', name: 'Mattancherry Palace', parent: 'g2006', type: '', lat: 9.9583, lng: 76.2593 },
-  tip: 'Mattancherry Palace (the Dutch Palace) is a museum. Nobody can book a room there — a monument is not an accommodation. Reject.' },
+  tip: 'Mattancherry Palace (the Dutch Palace) is a museum. Nobody can book a room there — a monument is not an accommodation. Reject → Incorrect property type (not an accommodation).' },
 
 { id: 'D1-10', day: 1, q: 10, req: 121553517,
   feed: { name: 'Amberleaf Spice Court', street: 'Rosappookandam Road', postal: '685509', parentText: 'IN, Thekkady', rooms: '22', lat: 9.6080, lng: 77.1660, desc: 'Luxury spice-garden hotel with pool. Best rates guaranteed.' },
   ans: { decision: 'reject', reason: 'unverifiable', name: 'Amberleaf Spice Court', parent: 'g2004', lat: 9.6080, lng: 77.1660 },
   src: { audit: [{ date: '2026-09-30 03:12', who: 'Hopper bulk import', what: 'Request created – 1 of 4,812 records in batch HB-0930' }] },
-  tip: 'Google, Google Maps, Tripadvisor, social media and Kerala Tourism show nothing for this name. With zero evidence the property exists, Reject as Unverifiable.' },
+  tip: 'Google, Google Maps, Tripadvisor, social media and Kerala Tourism show nothing for this name. With zero evidence the property exists, Reject → Cannot verify.' },
 
 /* =========================== DAY 2 — FEED CLEAN-UP =========================== */
 { id: 'D2-01', source: 'https://www.keralatourism.org/homestays/the-haven-munnar/4071', day: 2, q: 1, req: 121560044,
@@ -228,14 +251,15 @@ const CASES = [
   tip: 'The feed pin was in Kollam city, 11 km away. Munroe Island is its own parent geo.' },
 
 { id: 'D2-08', day: 2, q: 8, req: 121560158,
-  feed: { name: 'CGH Earth Brunton Boatyard Hotel Fort Kochi', street: 'Calvetty Road', postal: '682001', parentText: 'IN, Kochi', lat: 9.9666, lng: 76.2427 },
-  ans: { decision: 'alias', reason: 'duplicate', name: 'Brunton Boatyard', parent: 'g2006', type: 'Hotel', lat: 9.9666, lng: 76.2427 },
-  tip: 'Brunton Boatyard is a long-established Fort Kochi hotel already on Tripadvisor. "CGH Earth … Hotel Fort Kochi" is just brand + city padding. Paste the existing listing link and add the alias.' },
+  feed: { name: 'CGH Earth Brunton Boatyard Hotel Fort Kochi', brand: 'CGH Earth', street: 'Calvetty Road', postal: '682001', parentText: 'IN, Kochi', lat: 9.9666, lng: 76.2427 },
+  listing: { id: 'd325218', name: 'Brunton Boatyard - CGH Earth', brand: '', street: 'Calvetty Road', postal: '682001', parent: 'g2006', type: 'Hotel', lat: 9.9666, lng: 76.2427 },
+  ans: { decision: 'alias', reason: 'duplicate', match: 'd325218', name: ['Brunton Boatyard - CGH Earth', 'Brunton Boatyard'], brand: 'CGH Earth', parent: 'g2006', type: 'Hotel', lat: 9.9666, lng: 76.2427 },
+  tip: 'The possible match is the existing Brunton Boatyard listing (d325218) — same hotel, same street. Add name as alias, then edit: the listing has no Brand, and cghearth.com lists Brunton Boatyard, so accept the requested Brand ➜ CGH Earth. Don\'t copy the padded feed name.' },
 
 { id: 'D2-09', day: 2, q: 9, req: 121560176,
   feed: { name: 'Kathakali Centre Guest Rooms', street: 'K.B. Jacob Road', postal: '682001', parentText: 'IN, Fort Kochi', lat: 9.9658, lng: 76.2421 },
   ans: { decision: 'reject', reason: 'not_accommodation', name: 'Kerala Kathakali Centre', parent: 'g2006', type: '', lat: 9.9658, lng: 76.2421 },
-  tip: 'The Kerala Kathakali Centre is a performance and cultural venue (shows, classes). It has no rooms for guests — Reject as not an accommodation.' },
+  tip: 'The Kerala Kathakali Centre is a performance and cultural venue (shows, classes). It has no rooms for guests — Reject → Incorrect property type (not an accommodation).' },
 
 { id: 'D2-10', day: 2, q: 10, req: 121560190,
   feed: { name: 'Goldcoast Sapphire Villas', street: 'Cherai Beach Road', postal: '683514', parentText: 'IN, Cherai', lat: 10.1418, lng: 76.1780,
@@ -252,7 +276,8 @@ const CASES = [
   ans: { decision: 'approve', reason: 'new_verified', name: 'Signature Homestay', street: ['Vayanasaala Road, Kunchithanny', 'Vayanasaala Road'], postal: '685565', parent: ['g2001', 'g2003'],
     phone: '+91 94478 21288', email: 'suryashibu75@gmail.com', url: '', type: 'Guest House', lat: 10.0190964, lng: 77.0628583 },
   geoTol: 300,
-  tip: 'Kunchithanny isn\'t a parent geo — use the nearest real one (Munnar). The feed pin was in Munnar town, 7.7 km north of the property.' },
+  listing: { id: 'd8812455', name: 'Signature Inn', street: 'Main Road', postal: '673121', parent: 'g2009', type: 'Hotel', lat: 11.6085, lng: 76.0830 },
+  tip: 'The possible match "Signature Inn" is a hotel in Kalpetta, Wayanad — similar name, different property. Not match, create new. Kunchithanny isn\'t a parent geo — use the nearest real one (Munnar). The feed pin was in Munnar town, 7.7 km north of the property.' },
 
 { id: 'D3-02', source: 'https://www.keralatourism.org/homestays/greenshore/7757', day: 3, q: 2, req: 121571219,
   feed: { name: 'GREENSHORE VILLA VAGAMON', street: '52A Kalathil', postal: '685505', parentText: 'IN, Vagamon', lat: 9.6862, lng: 76.9058 },
@@ -291,19 +316,20 @@ const CASES = [
 
 { id: 'D3-07', day: 3, q: 7, req: 121571297,
   feed: { name: 'Spice Village CGH Earth Kumily', street: 'Thekkady-Kumily Road', postal: '685536', parentText: 'IN, Thekkady', lat: 9.6036, lng: 77.1633 },
-  ans: { decision: 'alias', reason: 'duplicate', name: 'Spice Village', parent: 'g2004', type: 'Resort', lat: 9.6036, lng: 77.1633 },
-  tip: 'Spice Village is a well-known Thekkady resort already on Tripadvisor. Brand and town were padded into the feed name. Alias it.' },
+  listing: { id: 'd587399', name: 'Spice Village, CGH Earth', brand: 'CGH Earth', street: 'Thekkady-Kumily Road', postal: '685536', parent: 'g2004', type: 'Hotel', lat: 9.6036, lng: 77.1633 },
+  ans: { decision: 'alias', reason: 'duplicate', match: 'd587399', name: ['Spice Village, CGH Earth', 'Spice Village'], brand: 'CGH Earth', parent: 'g2004', type: 'Resort', lat: 9.6036, lng: 77.1633 },
+  tip: 'Same property as the existing listing (d587399) → Add name as alias. Then edit as per sources: the listing still says Hotel, but Spice Village is a resort (cottages on large grounds, pool, spa — see the provider amenities and the official site), so change Accommodation Type to Resort.' },
 
 { id: 'D3-08', day: 3, q: 8, req: 121571310,
   feed: { name: 'Napier Museum', street: 'Museum Road', postal: '695033', parentText: 'IN, Trivandrum', lat: 8.5089, lng: 76.9554 },
   ans: { decision: 'reject', reason: 'not_accommodation', name: 'Napier Museum', parent: 'g2017', type: '', lat: 8.5089, lng: 76.9554 },
-  tip: 'The feed sent a famous museum as a new property. A museum is an attraction, not an accommodation — Reject.' },
+  tip: 'The feed sent a famous museum as a new property. A museum is an attraction, not an accommodation — Reject → Incorrect property type (not an accommodation).' },
 
 { id: 'D3-09', day: 3, q: 9, req: 121571326,
   feed: { name: 'Saltwind Heritage Inn', street: 'Fort Road', postal: '670001', parentText: 'IN, Kannur', rooms: '14', lat: 11.8697, lng: 75.3632 },
   ans: { decision: 'reject', reason: 'unverifiable', name: 'Saltwind Heritage Inn', parent: 'g2019', lat: 11.8697, lng: 75.3632 },
   src: { audit: [{ date: '2026-10-01 02:40', who: 'Hopper bulk import', what: 'Request created – 1 of 2,316 records in batch HB-1001' }] },
-  tip: 'No website, no Maps pin, no social pages, no Kerala Tourism entry. Unverifiable → Reject.' },
+  tip: 'No website, no Maps pin, no social pages, no Kerala Tourism entry. Reject → Cannot verify.' },
 
 { id: 'D3-10', day: 3, q: 10, req: 121571342,
   feed: { name: 'Royal Raft Houseboats', street: 'Kavanattinkara Jetty', postal: '686563', parentText: 'IN, Kumarakom', lat: 9.6094, lng: 76.4350,
@@ -351,18 +377,19 @@ const CASES = [
 
 { id: 'D4-06', day: 4, q: 6, req: 121584088,
   feed: { name: 'Taj Palace & Tower Colaba', street: 'Apollo Bunder', postal: '400001', parentText: 'IN, Mumbai', lat: 18.9217, lng: 72.8332 },
-  ans: { decision: 'alias', reason: 'duplicate', name: 'The Taj Mahal Palace', parent: 'g2033', type: 'Hotel', lat: 18.9217, lng: 72.8332 },
-  tip: 'One of the most famous hotels in India — it is obviously on Tripadvisor. Match it to the existing listing.' },
+  listing: { id: 'd302179', name: 'The Taj Mahal Palace', brand: '', street: 'Apollo Bunder', postal: '400001', parent: 'g2033', type: 'Hotel', lat: 18.9217, lng: 72.8332 },
+  ans: { decision: 'alias', reason: 'duplicate', match: 'd302179', name: 'The Taj Mahal Palace', brand: 'Taj Hotels', parent: 'g2033', type: 'Hotel', lat: 18.9217, lng: 72.8332 },
+  tip: 'One of the most famous hotels in India — the possible match (d302179) is it. Add name as alias, keep the listing name (not the feed\'s "Taj Palace & Tower Colaba"), and fix the missing Brand: tajhotels.com lists it → Taj Hotels.' },
 
 { id: 'D4-07', day: 4, q: 7, req: 121584103,
   feed: { name: 'Leopold Cafe & Stay', street: 'Colaba Causeway', postal: '400005', parentText: 'IN, Mumbai', lat: 18.9227, lng: 72.8317 },
   ans: { decision: 'reject', reason: 'not_accommodation', name: 'Leopold Cafe', parent: 'g2033', type: '', lat: 18.9227, lng: 72.8317 },
-  tip: 'Leopold Cafe is a famous restaurant and bar. "& Stay" in the feed doesn\'t make it lodging — there are no guest rooms. Reject.' },
+  tip: 'Leopold Cafe is a famous restaurant and bar. "& Stay" in the feed doesn\'t make it lodging — there are no guest rooms. Reject → Incorrect property type (not an accommodation).' },
 
 { id: 'D4-08', day: 4, q: 8, req: 121584119,
   feed: { name: 'Cliffnova Suites', street: 'North Cliff', postal: '695141', parentText: 'IN, Varkala', rooms: '18', lat: 8.7379, lng: 76.7163 },
   ans: { decision: 'reject', reason: 'unverifiable', name: 'Cliffnova Suites', parent: 'g2014', lat: 8.7379, lng: 76.7163 },
-  tip: 'Varkala North Cliff is full of real guesthouses, but none with this name — no site, no Maps listing, no socials, no registration. Unverifiable → Reject.' },
+  tip: 'Varkala North Cliff is full of real guesthouses, but none with this name — no site, no Maps listing, no socials, no registration. Reject → Cannot verify.' },
 
 { id: 'D4-09', day: 4, q: 9, req: 121584134,
   feed: { name: 'Cloudcrest Resort Ponmudi', street: 'Ponmudi Ghat Road, 22nd Hairpin', parentText: 'IN, Ponmudi', lat: 8.7600, lng: 77.1160 },
@@ -408,7 +435,8 @@ const CASES = [
   ans: { decision: 'approve', reason: 'new_verified', name: ['The Nest Homestay', 'The Nest'], street: ['TC 64/2248 (3), GV Raja Road', 'GV Raja Road'], street2: ['Vellar', ''], postal: '695527', parent: 'g2015',
     phone: '+91 62820 44427', email: 'bookthenestkovalam1@gmail.com', url: '', type: ['Guest House', 'Apartment Hotel'], lat: 8.403506, lng: 76.975703 },
   geoTol: 250,
-  tip: 'Kovalam trap again (the pin was in Tamil Nadu), and the only link in the Description is Airbnb — not an official website, so URL stays blank.' },
+  listing: { id: 'd7734019', name: 'The Nest Beach House', street: 'North Cliff', postal: '695141', parent: 'g2014', type: 'Guest House', lat: 8.7379, lng: 76.7163 },
+  tip: 'The possible match "The Nest Beach House" is on North Cliff, Varkala — about 45 km away, a different property. Not match, create new. Kovalam trap again (the pin was in Tamil Nadu), and the only link in the Description is Airbnb — not an official website, so URL stays blank.' },
 
 { id: 'D5-05', source: 'https://www.keralatourism.org/homestays/brick-house/7103', day: 5, q: 5, req: 121597077,
   feed: { name: 'Brick House', parentText: 'IN, Calicut', lat: 11.2588, lng: 75.7804 },
@@ -419,23 +447,24 @@ const CASES = [
 
 { id: 'D5-06', day: 5, q: 6, req: 121597093,
   feed: { name: 'MBS Hotel Tower 1 Singapore', street: '10 Bayfront Avenue', postal: '018956', parentText: 'SG, Singapore', lat: 1.2834, lng: 103.8607 },
-  ans: { decision: 'alias', reason: 'duplicate', name: 'Marina Bay Sands', parent: 'g2034', type: 'Hotel', lat: 1.2834, lng: 103.8607 },
-  tip: '"MBS Hotel Tower 1" is Marina Bay Sands — one of the best-known hotels in the world. Alias, never create.' },
+  listing: { id: 'd1770798', name: 'Marina Bay Sands', street: '10 Bayfront Avenue', postal: '018956', parent: 'g2034', type: 'Hotel', lat: 1.2834, lng: 103.8607 },
+  ans: { decision: 'alias', reason: 'duplicate', match: 'd1770798', name: 'Marina Bay Sands', parent: 'g2034', type: ['Hotel', 'Resort'], lat: 1.2834, lng: 103.8607 },
+  tip: '"MBS Hotel Tower 1" is Marina Bay Sands — the possible match (d1770798) has the same address. Add name as alias, never create. Nothing else needs changing: ✖ the feed name so the listing keeps "Marina Bay Sands".' },
 
 { id: 'D5-07', day: 5, q: 7, req: 121597110,
   feed: { name: 'Wonderla Kochi Resort', street: 'Pallikkara', postal: '683565', parentText: 'IN, Kochi', lat: 10.0225, lng: 76.4055 },
   ans: { decision: 'reject', reason: 'not_accommodation', name: 'Wonderla Kochi', parent: 'g2006', type: '', lat: 10.0225, lng: 76.4055 },
-  tip: 'Wonderla Kochi is an amusement park. (There is a Wonderla resort — but it\'s in Bengaluru, not Kochi.) Check the city before you decide. Reject.' },
+  tip: 'Wonderla Kochi is an amusement park. (There is a Wonderla resort — but it\'s in Bengaluru, not Kochi.) Check the city before you decide. Reject → Incorrect property type (not an accommodation).' },
 
 { id: 'D5-08', day: 5, q: 8, req: 121597126,
   feed: { name: 'Lanternhouse Grande', street: 'Princess Street', postal: '682001', parentText: 'IN, Fort Kochi', rooms: '26', lat: 9.9660, lng: 76.2425 },
   ans: { decision: 'reject', reason: 'unverifiable', name: 'Lanternhouse Grande', parent: 'g2006', lat: 9.9660, lng: 76.2425 },
-  tip: 'Princess Street is real and busy, but nothing online matches this name. With no evidence, Reject as Unverifiable.' },
+  tip: 'Princess Street is real and busy, but nothing online matches this name. With no evidence, Reject → Cannot verify.' },
 
 { id: 'D5-09', day: 5, q: 9, req: 121597141,
   feed: { name: 'Tamarindbay Residency', street: 'Beach Road', postal: '673032', parentText: 'IN, Kozhikode', lat: 11.2560, lng: 75.7700 },
   ans: { decision: 'reject', reason: 'unverifiable', name: 'Tamarindbay Residency', parent: 'g2021', lat: 11.2560, lng: 75.7700 },
-  tip: 'No trace anywhere online. Unverifiable → Reject. (No scam signs, so not Tier 2.)' },
+  tip: 'No trace anywhere online. Reject → Cannot verify. (No scam signs, so not Tier 2.)' },
 
 { id: 'D5-10', day: 5, q: 10, req: 121597158,
   feed: { name: 'Azure Pearl Villas', street: 'Lighthouse Beach', postal: '695527', parentText: 'IN, Kovalam', lat: 8.3832, lng: 76.9790,
@@ -446,4 +475,4 @@ const CASES = [
 ];
 
 /* Export for Node tooling (answer-key builder). Ignored in the browser. */
-if (typeof module !== 'undefined') module.exports = { BRANDS, ACCOM_TYPES, AMENITY_PROFILES, PROVIDER_ATTRIBUTIONS, DECISIONS, REASONS, GEOS, CASES };
+if (typeof module !== 'undefined') module.exports = { BRANDS, ACCOM_TYPES, AMENITY_PROFILES, PROVIDER_ATTRIBUTIONS, DECISIONS, REASONS, LEGACY_REASONS, GEOS, CASES };
