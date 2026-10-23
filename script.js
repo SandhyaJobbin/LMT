@@ -2,11 +2,11 @@
    LMT PLACES SIMULATOR — SETTINGS  (edit this block only)
    ===================================================================== */
 const APP_CONFIG = {
-  VERSION: '2.4',
+  VERSION: '2.6',
 
   // Paste your Google Apps Script URL (ends in /exec) between the quotes so every
   // agent PC saves to the Google Sheet. Leave '' to run offline (browser storage).
-  // Trainers can also paste it in Admin Portal → Settings (saved per browser).
+  // (v2.6: the URL is set only here; it is no longer shown in Admin Portal → Settings.)
   WEB_APP_URL: 'https://script.google.com/macros/s/AKfycby4Wr2UNaJdaqBS852Fq5TQpi7ULn44LGOtWXKrk0GwS_Z11asCM0u4rCo5pMiVEysq/exec',
 
   PASS_MARK: 80,            // % average score needed to pass a day
@@ -33,6 +33,19 @@ const APP_CONFIG = {
   // with its full chain (village, sub-district, district, state, country). Free OpenStreetMap services, no key needed.
   // Optional: put a free GeoNames username here (geonames.org → create account → enable "free web services") to search GeoNames first.
   GEO_SEARCH: { providers: ['nominatim', 'photon'], geonamesUser: '', language: 'en', maxResults: 10 },
+
+  // Map under Geo Coding. The first tile server that loads is used; if a network blocks it, the next one is
+  // tried automatically. (tile.openstreetmap.org is NOT used: its volunteer servers block shared office traffic
+  // and show "Access blocked" tiles.) Satellite = the Map / Satellite switch in the map's top right corner.
+  MAP_TILES: [
+    { name: 'Esri Street Map', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', attribution: 'Tiles © Esri' },
+    { name: 'CARTO Voyager', url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', subdomains: 'abcd', attribution: '© OpenStreetMap contributors © CARTO' }
+  ],
+  MAP_SATELLITE: {
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    labels: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Imagery © Esri'
+  },
 
   // Left menu → "Helpful Links". Same five options as the live LMT, in the same order.
   // {name} = feed name · {city} = city from the feed's parent text · {cc} = its country code (e.g. IN)
@@ -113,13 +126,13 @@ function sha256(ascii) {
 
 /* ---------------- constants ---------------- */
 const DAY_META_BUILTIN = {
-  1: { title: 'Fundamentals', icon: '🧭', desc: 'Real small properties: clean names, addresses, phones and pins.' },
-  2: { title: 'Feed Clean-up', icon: '🧹', desc: 'Messy feeds — wrong case, wrong postal codes, wrong pins.' },
-  3: { title: 'Parents & Geo Traps', icon: '🗺️', desc: 'Pick the right parent geo and fix pins that land in the wrong town.' },
-  4: { title: 'Investigation', icon: '🕵️', desc: 'Duplicates, businesses that aren\'t hotels, and suspicious requests.' },
-  5: { title: 'Final Mixed Mission', icon: '🏆', desc: 'Everything you\'ve learned — no warm-up.' }
+  1: { title: 'Accommodations 1', icon: '🧭', desc: 'Real small properties: clean names, addresses and pins.' },
+  2: { title: 'Accommodations 2', icon: '🧹', desc: 'Messy feeds: wrong case, wrong postal codes, wrong pins.' },
+  3: { title: 'Accommodations 3', icon: '🗺️', desc: 'Pick the right parent geo and fix pins that land in the wrong town.' },
+  4: { title: 'Accommodations 4', icon: '🕵️', desc: 'Duplicates, businesses that are not hotels, and suspicious requests.' },
+  5: { title: 'Accommodations 5', icon: '🏆', desc: 'Everything you have learned, with no warm up.' }
 };
-const dayMeta = d => DAY_META_BUILTIN[d] || { title: 'Custom Day ' + d, icon: '📝', desc: 'Trainer-built cases.' };
+const dayMeta = d => DAY_META_BUILTIN[d] || { title: 'Accommodations ' + d, icon: '📝', desc: 'Trainer built cases.' };
 const LEVELS = [[0, 'Trainee Mapper'], [600, 'Geo Scout'], [1500, 'Data Ranger'], [2700, 'Listing Pro'], [4000, 'Places Specialist'], [5200, 'LMT Master']];
 const REQ_SECTIONS = { basic: 'Basic Info', contact: 'Contact Details', accom: 'Accommodation Info', geo: 'Geo Coding' };
 /* Sections that stay hidden on every new request until the agent clicks "Show All Fields" (same as the live LMT) */
@@ -132,7 +145,10 @@ const RESEARCH_FIELDS = ['phone', 'fax', 'email', 'url', 'type'];
 const cleanFeed = f => { const o = Object.assign({}, f || {}); RESEARCH_FIELDS.forEach(k => delete o[k]); return o; };
 const ATTRIBUTIONS = ['', 'Provider feed', 'Official website', 'Maps listing', 'Social media', 'Owner verified', 'Agent research'];
 let GEO_BY_ID = Object.fromEntries(GEOS.map(g => [g.id, g]));
-const geoLabel = id => { const g = GEO_BY_ID[id]; return g ? g.name + (g.path ? ', ' + g.path : '') : ''; };
+/* Parent geos are shown like Tripadvisor nav strings: "India, Kerala, Idukki District, Munnar" */
+const geoLabel = id => { const g = GEO_BY_ID[id]; return g ? (g.nav || (g.name + (g.path ? ', ' + g.path : ''))) : ''; };
+/* "303881 - India, Kerala, Idukki District, Munnar" (template / answer key format) */
+const geoTplLabel = id => { const g = GEO_BY_ID[id]; return g ? (g.ta ? g.ta + ' - ' : '') + geoLabel(id) : String(id || ''); };
 const geoCity = id => { const g = GEO_BY_ID[id]; return g ? g.name.replace(/\s*\(.*\)$/, '') : ''; };
 function levelFor(xp) {
   let i = 0; for (let k = 0; k < LEVELS.length; k++) if (xp >= LEVELS[k][0]) i = k;
@@ -142,7 +158,7 @@ function levelFor(xp) {
 
 /* ---------------- API layer ---------------- */
 const API = {
-  url() { return (LS.get('lmt_api_url', '') || APP_CONFIG.WEB_APP_URL || '').trim(); },
+  url() { return (APP_CONFIG.WEB_APP_URL || LS.get('lmt_api_url', '') || '').trim(); }, // v2.6: script.js URL always wins
   configured() { return !!this.url(); },
   call(payload) {
     const u = this.url(); if (!u) return Promise.reject(new Error('offline'));
@@ -207,12 +223,26 @@ function registerQuestionGeos() {
   (CFG.questions || []).forEach(q => { [].concat(q.geos || [], q.geo ? [q.geo] : []).forEach(g => { if (g && g.id && !GEOS.some(x => x.id === g.id)) GEOS.push(g); }); });
   GEO_BY_ID = Object.fromEntries(GEOS.map(g => [g.id, g]));
 }
+function normQuestion(q) {
+  const LG = typeof LEGACY_GEOS !== 'undefined' ? LEGACY_GEOS : {}, LT = typeof LEGACY_TYPES !== 'undefined' ? LEGACY_TYPES : {}, LR = typeof LEGACY_REASONS !== 'undefined' ? LEGACY_REASONS : {};
+  const mapG = v => Array.isArray(v) ? v.map(x => LG[x] || x) : (LG[v] || v);
+  const mapT = v => Array.isArray(v) ? v.map(x => LT[x] || x) : (LT[v] || v);
+  const A = Object.assign({}, q.ans || {});
+  if (A.parent) A.parent = mapG(A.parent);
+  if (A.decision === 't2') A.decision = 't1';                       // Tier 1 and Tier 2 are one "Escalate" action now
+  if (A.reason !== undefined) { const r = [].concat(A.reason).map(x => REASONS[x] ? x : (LR[x] || x)); A.reason = r.length > 1 ? r : r[0]; }
+  if (A.type !== undefined) A.type = mapT(A.type);
+  const out = { ans: A };
+  if (q.listing) out.listing = Object.assign({}, q.listing, { parent: mapG(q.listing.parent), type: mapT(q.listing.type) });
+  if (q.listingNow && q.listingNow.type) out.listingNow = Object.assign({}, q.listingNow, { type: mapT(q.listingNow.type) });
+  return out;
+}
 function allQuestions() {
   const custom = CFG.questions || [];
   const ids = new Set(custom.map(q => q.id));
   const off = new Set(CFG.builtinOff || []);
-  const builtins = CASES.filter(c => !ids.has(c.id)).map(c => Object.assign({}, c, { feed: cleanFeed(c.feed), custom: false, active: !off.has(c.id) }));
-  return builtins.concat(custom.map(q => Object.assign({}, q, { feed: cleanFeed(q.feed), custom: true, active: isActive(q.active) })))
+  const builtins = CASES.filter(c => !ids.has(c.id)).map(c => Object.assign({}, c, normQuestion(c), { feed: cleanFeed(c.feed), custom: false, active: !off.has(c.id) }));
+  return builtins.concat(custom.map(q => Object.assign({}, q, normQuestion(q), { feed: cleanFeed(q.feed), custom: true, active: isActive(q.active) })))
     .sort((a, b) => a.day - b.day || a.q - b.q);
 }
 function casesForDay(d) { return allQuestions().filter(c => c.active && Number(c.day) === Number(d)).slice(0, APP_CONFIG.QUESTIONS_PER_DAY); }
@@ -236,26 +266,26 @@ const TPL = [
   ['feed.desc', 'Feed Description', 'Optional text the feed sent (can contain red flags).'],
   ['providerUrl', 'Provider Page URL', 'Optional real link opened by "Open Provider Page". Blank = a generated provider snapshot opens.'],
   ['amen', 'Provider Amenities', 'Optional. Amenities shown on the provider snapshot — the clues agents use to pick the type. Separate with " ;; ". Blank = a standard list for the Correct Accommodation Type.'],
-  ['ans.decision', 'Correct Action', 'Required. Approve, Alias, Reject, Tier 1, Tier 2 or Defer.'],
+  ['ans.decision', 'Correct Action', 'Required. Approve, Alias, Reject, Escalate or Defer. (Old values Tier 1 / Tier 2 are read as Escalate.)'],
   ['ans.reason', 'Correct Reason', 'Required for Reject / Tier 1 / Tier 2 / Defer. Use a reason from the Lists sheet. Several accepted: separate with " | ".'],
   ['ans.match', 'Existing Tripadvisor Listing (Alias)', 'For Alias (possible match / dupe) cases: the existing listing\'s Tripadvisor URL or location ID (d123456). LMT shows it as the possible match, pre-filled with the Correct … values (plus any Current Values below). The agent clicks "Add name as alias" and edits what is wrong.'],
   ['listingNow', 'Existing Listing – Current Values', 'Optional, Alias cases only. What the existing listing shows NOW, as field=value pairs separated by " ;; " — e.g.  type=Hotel ;; brand=BLANK. Values that differ from the Correct … columns are what the agent must edit. Fields: name, brand, street, street2, postal, phone, email, url, type, rooms.'],
   ['decoy', 'Look-alike Listing (not a match)', 'Optional, non-Alias cases only. A similar existing listing that LMT shows as a possible match but is a DIFFERENT property:  Name ;; Address ;; Parent (City, Region, Country) ;; lat, lng ;; Type (optional). The agent must click "Not match, create new".'],
-  ['ans.name', 'Correct Name', 'Expected value. Blank = not scored. BLANK = agent must leave it empty. Several accepted: " | ".'],
+  ['ans.name', 'Correct Name', 'SCORED. Expected value. Blank = not scored. BLANK = agent must leave it empty. Several accepted: " | ".'],
   ['ans.brand', 'Correct Brand', 'Same rules. Must match a brand in the Lists sheet, or BLANK.'],
-  ['ans.street', 'Correct Street One', 'Same rules.'],
+  ['ans.street', 'Correct Street One', 'SCORED. Same rules.'],
   ['ans.street2', 'Correct Street Two', 'Same rules.'],
   ['ans.postal', 'Correct Postal Code', 'Same rules.'],
-  ['parentLabel', 'Correct Parent (City, Region, Country)', 'Required. e.g. "Munnar, Idukki District, Kerala, India". Several accepted parents: separate with " | ". New places are added to the parent search automatically.'],
+  ['parentLabel', 'Correct Parent (City, Region, Country)', 'Required. Tripadvisor geo code and nav string, e.g. "303881 - India, Kerala, Idukki District, Munnar" (just "303881" works for geos already in the Lists sheet). Several accepted parents: separate with " | ". New geos are added to the Parent search automatically, searchable by name and code. Not scored.'],
   ['ans.phone', 'Correct Phone', 'International format, e.g. +91 487 233 9104. Several accepted: " | ".'],
   ['ans.email', 'Correct Email', 'Same rules.'],
-  ['ans.url', 'Correct URL', 'Official website with https://. BLANK if the property has none.'],
-  ['ans.type', 'Correct Accommodation Type', 'From the Lists sheet. Use N/A for businesses with no rooms.'],
+  ['ans.url', 'Correct URL', 'SCORED. The official URL. BLANK if the property has none (an official Facebook / Instagram / Twitter page is then also accepted).'],
+  ['ans.type', 'Correct Accommodation Type', 'From the Lists sheet (the live LMT types). Use N/A for businesses with no rooms. Not scored, but agents cannot save a listing without one.'],
   ['ans.rooms', 'Correct Rooms', 'Number, or blank to skip.'],
   ['ans.floors', 'Correct Floors', 'Number, or blank to skip.'],
   ['ans.opening', 'Correct Opening Date', 'YYYY-MM-DD (for Defer / pre-opening cases), or blank.'],
   ['ans.allIncl', 'All Inclusive', 'Y or N, or blank to skip.'],
-  ['ans.lat', 'Correct Latitude', 'Required. Decimal degrees, e.g. 10.0889 (south = negative).'],
+  ['ans.lat', 'Correct Latitude', 'Required. SCORED (Geo). Decimal degrees, e.g. 10.0889 (south = negative).'],
   ['ans.lng', 'Correct Longitude', 'Required. Decimal degrees (west = negative).'],
   ['geoTol', 'Geo Tolerance (m)', 'Optional. Distance for full geo marks (default 150). Half marks up to 3× this.'],
   ['votes', 'Location Votes', 'Optional evidence shown in LMT. Format: "Closed: gate locked, sign says closed ;; Duplicate: same as xyz".'],
@@ -264,7 +294,8 @@ const TPL = [
   ['tip', 'Coaching Note', 'Required. Shown to the agent after they answer.'],
   ['source', 'Reference Link (trainers only)', 'Optional. Where you verified the answers (never shown to agents).']
 ];
-const DEC_ALIASES = { approve: 'approve', 'approve - create new': 'approve', create: 'approve', alias: 'alias', 'add alias': 'alias', duplicate: 'alias', reject: 'reject', close: 'reject', 'tier 1': 't1', t1: 't1', tier1: 't1', 'tier 2': 't2', t2: 't2', tier2: 't2', defer: 'defer', 'in progress': 'defer' };
+const DEC_ALIASES = { escalate: 't1', 'escalate to tier 1': 't1', 'escalate to tier 2': 't1', approve: 'approve', 'approve - create new': 'approve', create: 'approve', alias: 'alias', 'add alias': 'alias', duplicate: 'alias', reject: 'reject', close: 'reject', 'tier 1': 't1', t1: 't1', tier1: 't1', 'tier 2': 't1', t2: 't1', tier2: 't1', defer: 'defer', 'in progress': 'defer' };
+const isCountryName = t => { const n = norm(t); return !!n && (APP_CONFIG.DEFAULT_COUNTRIES.some(c => norm(c) === n) || ['usa', 'uk', 'uae', 'japan', 'singapore', 'india'].includes(n)); };
 const reasonFromText = t => {
   const s = String(t || '').trim().toLowerCase(); if (!s) return '';
   if (REASONS[s]) return s;
@@ -284,7 +315,7 @@ function rowToQuestion(r) {
   if (!g('feed.name')) err.push('Feed Name missing');
   const flat = Number(g('feed.lat')), flng = Number(g('feed.lng'));
   if (g('feed.lat') === '' || isNaN(flat) || Math.abs(flat) > 90 || g('feed.lng') === '' || isNaN(flng) || Math.abs(flng) > 180) err.push('Feed Latitude/Longitude invalid');
-  const dec = DEC_ALIASES[g('ans.decision').toLowerCase()]; if (!dec) err.push('Correct Action must be Approve, Alias, Reject, Tier 1, Tier 2 or Defer');
+  const dec = DEC_ALIASES[g('ans.decision').toLowerCase()]; if (!dec) err.push('Correct Action must be Approve, Alias, Reject, Escalate or Defer');
   let reason = g('ans.reason').split(/\s*\|\s*/).filter(Boolean).map(reasonFromText);
   if (reason.some(x => x === null)) { err.push('Unknown Correct Reason'); reason = []; }
   if (dec && reason.length && reason.some(x => REASONS[x].d !== dec)) err.push('Reason does not belong to action ' + dec);
@@ -295,22 +326,34 @@ function rowToQuestion(r) {
   const alat = Number(g('ans.lat')), alng = Number(g('ans.lng'));
   if (g('ans.lat') === '' || isNaN(alat) || Math.abs(alat) > 90 || g('ans.lng') === '' || isNaN(alng) || Math.abs(alng) > 180) err.push('Correct Latitude/Longitude invalid');
   if (!g('tip')) err.push('Coaching Note missing');
-  const types = [].concat(multi(g('ans.type')) || []); types.forEach(t => { if (t && t !== 'N/A' && !ACCOM_TYPES.includes(t)) err.push('Unknown accommodation type "' + t + '"'); });
+  const types = [].concat(multi(g('ans.type')) || []); types.forEach(t => { if (t && t !== 'N/A' && !ACCOM_TYPES.includes(LEGACY_TYPES[t] || t)) err.push('Unknown accommodation type "' + t + '" (see the Lists sheet)'); });
   const brands = [].concat(multi(g('ans.brand')) || []); brands.forEach(b => { if (b && !BRANDS.includes(b)) err.push('Unknown brand "' + b + '" (add it to BRANDS in data.js or use BLANK)'); });
   ['ans.rooms', 'ans.floors'].forEach(k => { const v = numOrU(g(k)); if (typeof v === 'number' && isNaN(v)) err.push(k.split('.')[1] + ' must be a number'); });
   if (g('ans.opening') && !/^\d{4}-\d{2}-\d{2}$/.test(g('ans.opening'))) err.push('Opening date must be YYYY-MM-DD');
   // parent(s): reuse an existing geo when the label matches, else create one. Alternatives separated by " | ".
   const geos = [], parents = [];
+  // Parent formats: "303881 - India, Kerala, Idukki District, Munnar" · "303881" (already in the simulator) ·
+  // "India, Kerala, Idukki District, Munnar" · old style "Munnar, Idukki District, Kerala, India"
   const geoFor = lbl => {
-    const ex = GEOS.find(x => norm(x.name + ', ' + x.path) === norm(lbl)) || GEOS.find(x => norm(x.name) === norm(lbl));
-    if (ex && !ex.noParent) return ex.id;
-    const parts = lbl.split(',').map(s => s.trim()).filter(Boolean); const geo = { id: 'cg_' + slug(lbl) + '_' + (sha256(lbl).slice(0, 4)), name: parts[0], path: parts.slice(1).join(', '), cc: '' };
-    if (!geos.some(x => x.id === geo.id)) geos.push(geo); return geo.id;
+    lbl = String(lbl).trim();
+    const m = lbl.match(/^g?(\d{3,})\s*(?:[-–—:·]\s*)?(.*)$/);
+    if (m) {
+      const ex = GEOS.find(x => String(x.ta) === m[1]); if (ex) return ex.id;
+      if (!m[2].trim()) { err.push('Geo code ' + m[1] + ' is not in the simulator — add its nav string, e.g. "' + m[1] + ' - India, Kerala, Idukki District, Munnar"'); return ''; }
+      const geo = navGeo(m[1], m[2]); if (!geos.some(x => x.id === geo.id)) geos.push(geo); return geo.id;
+    }
+    const parts = lbl.split(',').map(x => x.trim()).filter(Boolean);
+    const countryFirst = parts.length === 1 || isCountryName(parts[0]);
+    const nav = (countryFirst ? parts : parts.slice().reverse()).join(', ');
+    const ex = GEOS.find(x => norm(x.nav || '') === norm(nav)) || GEOS.find(x => norm(x.name + ', ' + x.path) === norm(lbl)) || (parts.length === 1 && GEOS.find(x => norm(x.name) === norm(lbl)));
+    if (ex) return ex.id;
+    const geo = navGeo(null, nav, 'cg_' + slug(nav) + '_' + sha256(nav).slice(0, 4)); if (!geos.some(x => x.id === geo.id)) geos.push(geo); return geo.id;
   };
-  plabel.split(/\s+\|\s+/).map(s => s.trim()).filter(Boolean).forEach(lbl => parents.push(geoFor(lbl)));
+  plabel.split(/\s+\|\s+/).map(s => s.trim()).filter(Boolean).forEach(lbl => { const id = geoFor(lbl); if (id) parents.push(id); });
   const parent = parents.length > 1 ? parents : (parents[0] || '');
   const ans = { decision: dec, reason: reason.length > 1 ? reason : reason[0], parent, lat: alat, lng: alng };
   ['name', 'brand', 'street', 'street2', 'postal', 'phone', 'email', 'url', 'type'].forEach(k => { const v = multi(g('ans.' + k)); if (v !== undefined) ans[k] = v; });
+  if (ans.type !== undefined) ans.type = Array.isArray(ans.type) ? ans.type.map(t => LEGACY_TYPES[t] || t) : (LEGACY_TYPES[ans.type] || ans.type);
   if (ans.type === 'N/A') ans.type = '';
   ['rooms', 'floors'].forEach(k => { const v = numOrU(g('ans.' + k)); if (v === '' || (typeof v === 'number' && !isNaN(v))) ans[k] = v; });
   if (g('ans.opening')) ans.opening = g('ans.opening');
@@ -351,11 +394,11 @@ function rowToQuestion(r) {
 /* case object → template row (for export / edit form) */
 function questionToRow(c) {
   const A = c.ans, F = c.feed, join = v => v === '' ? 'BLANK' : v === undefined || v === null ? '' : Array.isArray(v) ? v.map(x => x === '' ? 'BLANK' : x).join(' | ') : String(v);
-  const D = { approve: 'Approve', alias: 'Alias', reject: 'Reject', t1: 'Tier 1', t2: 'Tier 2', defer: 'Defer' };
+  const D = { approve: 'Approve', alias: 'Alias', reject: 'Reject', t1: 'Escalate', t2: 'Escalate', defer: 'Defer' };
   const r = {
     id: c.id, day: c.day, q: c.q, active: c.active === false ? 'N' : 'Y', providerUrl: c.providerUrl || '', amen: (c.amen || []).join(' ;; '),
     'ans.decision': D[A.decision], 'ans.reason': [].concat(A.reason || []).map(x => REASONS[x] ? REASONS[x].label : x).join(' | '), 'ans.match': A.match || '',
-    parentLabel: c.parentLabel || [].concat(A.parent).map(geoLabel).join(' | '), 'ans.lat': A.lat, 'ans.lng': A.lng, geoTol: c.geoTol || '', tip: c.tip || '', source: c.source || '',
+    parentLabel: [].concat(A.parent).every(id => GEO_BY_ID[id]) ? [].concat(A.parent).map(geoTplLabel).join(' | ') : (c.parentLabel || ''), 'ans.lat': A.lat, 'ans.lng': A.lng, geoTol: c.geoTol || '', tip: c.tip || '', source: c.source || '',
     'ans.opening': A.opening || '', 'ans.allIncl': A.allIncl === undefined ? '' : A.allIncl ? 'Y' : 'N',
     votes: ((c.src && c.src.votes) || []).map(v => v.type + ': ' + v.comment).join(' ;; '),
     owners: ((c.src && c.src.owners) || []).map(o => [o.name, o.status, o.note].filter(Boolean).join(' – ')).join(' ;; '),
@@ -369,7 +412,7 @@ function questionToRow(c) {
     if (!A.match) r['ans.match'] = L.id;
     r.listingNow = LISTING_FIELDS.filter(k => L[k] !== undefined && L[k] !== null && !(A[k] !== undefined && [].concat(A[k]).some(v => String(v) === String(L[k]))))
       .map(k => k + '=' + (L[k] === '' ? 'BLANK' : L[k])).join(' ;; ');
-  } else if (L) r.decoy = [L.name, [L.street, L.postal].filter(Boolean).join(', '), geoLabel(L.parent), L.lat + ', ' + L.lng, L.type || ''].join(' ;; ');
+  } else if (L) r.decoy = [L.name, [L.street, L.postal].filter(Boolean).join(', '), geoTplLabel(L.parent), L.lat + ', ' + L.lng, L.type || ''].join(' ;; ');
   ['name', 'brand', 'street', 'street2', 'postal', 'parentText', 'rooms', 'lat', 'lng', 'desc'].forEach(k => r['feed.' + k] = F[k] == null ? '' : F[k]);
   return r;
 }
@@ -396,7 +439,7 @@ function refreshDaySession() {
   const curDay = daySel.value, avail = new Set(availableDays());
   if (wave) {
     const days = wave.days.split(/[,\s]+/).map(Number).filter(d => d >= 1 && d <= APP_CONFIG.MAX_DAYS && avail.has(d));
-    daySel.innerHTML = '<option value="">— Select day —</option>' + days.map(d => `<option value="${d}"${String(d) === curDay ? ' selected' : ''}>Day ${d} · ${esc(dayMeta(d).title)}</option>`).join('');
+    daySel.innerHTML = '<option value="">— Select day —</option>' + days.map(d => `<option value="${d}"${String(d) === curDay ? ' selected' : ''}>Day ${d} - ${esc(dayMeta(d).title)}</option>`).join('');
     daySel.disabled = !!$('#inSession').value; dayFld.classList.toggle('locked', daySel.disabled);
     $('#dayLockTxt').textContent = daySel.disabled ? '(locked – session chosen)' : `(${days.length} unlocked)`;
   } else {
@@ -444,82 +487,64 @@ function showGuide() {
   const d = S.user.day, m = dayMeta(d), n = casesForDay(d).length;
   const prof = profile();
   const dchip = k => `<span class="dchip" style="background:${DECISIONS[k].color}">${DECISIONS[k].icon} ${DECISIONS[k].short}</span>`;
+  const rejectList = Object.values(REASONS).filter(r => r.d === 'reject').map(r => esc(r.label)).join(' · ');
   $('#guideWrap').innerHTML = `
   <div class="guide-hero">
-    <h2>${m.icon} Day ${d} Mission · ${esc(m.title)}</h2>
-    <p>Welcome, <b>${esc(S.user.name)}</b>. You are a Places agent working the <b>Location Tool (LMT)</b>. ${n} new-listing requests from the provider feed are waiting. For each one, research the property yourself in <b>Google Chrome</b>, fix the data in LMT, then take the right action. ${esc(m.desc)}</p>
-    <div class="mission-meta"><span>📋 ${n} cases</span><span>🎯 Pass mark ${APP_CONFIG.PASS_MARK}%</span><span>⏱ Target ≤ ${Math.round(APP_CONFIG.TARGET_SECONDS / 60)} min per case</span><span>⭐ ${prof.xp} XP · ${levelFor(prof.xp).name}</span>${S.user.sessionName ? `<span>🧑‍🏫 ${esc(S.user.sessionName)}</span>` : ''}</div>
+    <h2>${m.icon} Day ${d} · ${esc(m.title)}</h2>
+    <p>Welcome, <b>${esc(S.user.name)}</b>. You are a Places agent working in the <b>Location Tool (LMT)</b>. ${n} new listing requests from the provider feed are waiting. For each one, research the property yourself in <b>Google Chrome</b>, fix the data in LMT, then take the right action. ${esc(m.desc)}</p>
+    <div class="mission-meta"><span>📋 ${n} cases</span><span>🎯 Pass mark ${APP_CONFIG.PASS_MARK}%</span><span>⏱ Target ${Math.round(APP_CONFIG.TARGET_SECONDS / 60)} min per case</span><span>⭐ ${prof.xp} XP · ${levelFor(prof.xp).name}</span>${S.user.sessionName ? `<span>🧑‍🏫 ${esc(S.user.sessionName)}</span>` : ''}</div>
   </div>
 
-  <div class="gsec"><h3><span class="n">1</span>The LMT request page — scroll from top to bottom</h3>
-    <div class="infobox" style="margin-top:0"><b>👁 First click on every request: Show All Fields</b> (left menu). Like the live LMT, each new request opens with <b>Phone, Fax and Email (Contact Details shows only URL), Description and Internal hidden</b>. Fraud clues often sit in the Description — if you skip this step you will miss them.</div>
+  <div class="gsec"><h3><span class="n">1</span>The LMT request page: scroll from top to bottom</h3>
+    <div class="infobox" style="margin-top:0"><b>👁 First click on every request: Show All Fields</b> (left menu). Like the live LMT, each new request opens with <b>Phone, Fax and Email, Description, Internal and Geo Coding hidden</b>. Fraud clues often sit in the Description, so if you skip this step you will miss them.</div>
     <div class="steps5">
-      <div class="s5"><i>👁</i><b>Show All Fields</b><p>Reveals Phone, Fax, Email, Description and the Internal Comment. Do it before anything else.</p></div>
-      <div class="s5"><i>🔗</i><b>Possible match?</b><p>If LMT shows a <b>possible match</b>, compare it. Same property → <b>＋ Add name as alias</b> and edit what sources say is wrong. Different → <b>✔＋ Not match, create new</b>.</p></div>
-      <div class="s5"><i>🪪</i><b>Basic Info</b><p>Name, Brand, Street One/Two, Postal Code and <b>Parent</b> (type the town or village in the Parent box, click 🔍, pick the most specific geo).</p></div>
-      <div class="s5"><i>🔗</i><b>Provider Link</b><p>Click <b>Open Provider Page in New Tab</b>. Read the <b>amenities</b> — they tell you the accommodation type.</p></div>
+      <div class="s5"><i>👁</i><b>Show All Fields</b><p>Reveals Phone, Fax, Email, Description, Internal Comment and Geo Coding. Do it before anything else.</p></div>
+      <div class="s5"><i>🔗</i><b>Possible match?</b><p>If LMT shows a <b>possible match</b>, compare it. Same property: click <b>＋ Add name as alias</b> and edit what the sources say is wrong. Different property: click <b>✔＋ Not match, create new</b>.</p></div>
+      <div class="s5"><i>🪪</i><b>Basic Info</b><p>Name, Street One and Two, Postal Code and <b>Parent</b> (type the town, village or geo code in the Parent box, click 🔍 and pick the most specific geo).</p></div>
+      <div class="s5"><i>📄</i><b>Provider Link</b><p>Click <b>Open Provider Page in New Tab</b>. Read the <b>amenities</b>. They tell you the accommodation type.</p></div>
       <div class="s5"><i>📖</i><b>Contact &amp; Accommodation</b><p>The feed sends <b>no phone, email, URL or type</b>. Find them online and type them in.</p></div>
-      <div class="s5"><i>🏷️</i><b>Internal &amp; Geo</b><p>Write an <b>Internal Comment</b> with your evidence. Fix the pin on the map or paste coordinates from Google Maps.</p></div>
+      <div class="s5"><i>🏷️</i><b>Internal &amp; Geo</b><p>Write an <b>Internal Comment</b> when you come across any blocked URLs or any conflicting information. Fix the pin on the map or paste coordinates from Google Maps.</p></div>
     </div>
-    <p style="font-size:12.5px;color:#6b7785;margin:10px 0 0">The left menu jumps to a section. <b>Apply</b> is optional — it just marks a section as checked. When you are done, use the action buttons (bottom-right) or <b>Take Action</b> at the end of the page.</p>
   </div>
 
   <div class="gsec"><h3><span class="n">2</span>How to research (in your own Chrome)</h3>
     <ul class="rules">
-      <li><b>Helpful Links</b> (left menu) has the same five options as the live tool: <b>Google · Google Maps · Geonames · Tripadvisor · StreetFinder</b>. For the official website, Facebook or Instagram, search Google yourself and adjust the search words until you find the property.</li>
-      <li><b>Phone, Email and URL</b> are never in the feed — copy them from the official website, Google Maps or the Kerala Tourism listing.</li>
-      <li><b>Accommodation Type</b> is never in the feed — decide it from the amenities on the provider page and OTAs (front desk? pool and spa? family home with a few rooms?).</li>
-      <li><b>Possible match / dupe:</b> when LMT shows an existing listing, the fields hold that listing's <b>current values</b>. If it is the same property (same address, phone, location), click <b>＋ Add name as alias</b> — the request is applied to the current listing — then <b>edit any field your sources say is wrong</b> (e.g. a missing Brand or the wrong type). If it is a different property, click <b>✔＋ Not match, create new</b>. No match shown? Still search Tripadvisor before creating.</li>
-      <li>Get coordinates from Google Maps: right-click the property pin → click the numbers at the top to copy them.</li>
+      <li><b>Helpful Links</b> (left menu) has the same five options as the live tool: <b>Google, Google Maps, Geonames, Tripadvisor and StreetFinder</b>.</li>
+      <li>Use the <b>official URL</b> (official website, Facebook, Twitter or Instagram) that has the most comprehensive information about the listing.</li>
+      <li><b>Accommodation Type</b> is never in the feed. Decide it from the amenities on the official website, provider page and OTAs. An accommodation listing must be assigned <b>ONE</b> Accommodation Type. It is impossible to save a listing if you do not select an Accommodation Type.</li>
+      <li><b>Possible match or dupe:</b> when LMT shows an existing listing, the fields hold that listing's <b>current values</b>. If it is the same property (same address, phone and location), click <b>＋ Add name as alias</b> to apply the request to the current listing, then <b>edit any field your sources say is wrong</b>. If it is a different property, click <b>✔＋ Not match, create new</b>. No match shown? Still search Tripadvisor before creating.</li>
+      <li>Get coordinates from Google Maps: right click the property pin, then click the numbers at the top to copy them.</li>
       <li>The <b>Requested Change</b> column is what the feed sent. Use <b>➜</b> to copy it across or <b>✖</b> to reject a wrong value. Feeds are often wrong!</li>
-      <li>Check <b>AuditTrail</b>, <b>Owners</b> (beige bar), <b>Location Votes</b> and the <b>Description</b> — internal evidence lives there.</li>
-      <li>Trust order: official website › Google Maps › the property's own social pages › provider feed. Newest evidence wins.</li>
+      <li><b>Hierarchy Order:</b> Official Website &gt; Provider Page (OTA) &gt; Social Media &gt; Google Listing.</li>
     </ul>
   </div>
 
-  <div class="gsec"><h3><span class="n">3</span>Data-entry style rules</h3>
+  <div class="gsec"><h3><span class="n">3</span>Data entry style rules</h3>
     <ul class="rules">
       <li><b>Name:</b> exactly as the property writes it, in Latin script. No city added unless it is part of the official name. Proper case, not ALL CAPS.</li>
-      <li><b>Address:</b> expand abbreviations (St → Street, Rd → Road, HTL → Hotel). Building/floor in Street One, area or landmark in Street Two.</li>
-      <li><b>Postal code:</b> only when a source confirms it. If no source shows one, leave it <b>blank</b>.</li>
-      <li><b>Phone:</b> international format: <code>+91 487 233 9104</code>. Drop the local trunk "0" after the country code.</li>
-      <li><b>URL:</b> official website only, starting with https://. Never a Facebook/Instagram/OTA link. No website → leave blank.</li>
-      <li><b>Email:</b> the property's own contact address. Leave blank if no source shows one.</li>
-      <li><b>Parent:</b> the most specific geo (village over district). Watch out for same-name places in other states or countries.</li>
-      <li><b>Brand:</b> select only if the brand's own website lists the property. Otherwise leave blank.</li>
+      <li><b>Address:</b> expand abbreviations (St → Street, Rd → Road, HTL → Hotel). Building or floor in Street One, area or landmark in Street Two.</li>
+      <li><b>Postal code:</b> only when a source confirms it. Leave blank if no source shows one.</li>
+      <li><b>Phone:</b> this is the public or local phone number of the property. The phone number should not be a reservations line or a toll free 1800 number. Leave blank if no source shows one.</li>
+      <li><b>URL:</b> the official URL (official website, Facebook, Twitter or Instagram) with the most comprehensive information about the listing. Never an OTA link. Leave blank if no source shows one.</li>
+      <li><b>Email:</b> should be the official contact or owner email for the property. This is NOT the requester's email. Make sure it follows the standard email format: name@domain.com. Leave blank if no source shows one.</li>
+      <li><b>Parent:</b> the most specific geo (village over district). Search by name or by geo code, for example 297586. Watch out for places with the same name in other states or countries.</li>
     </ul>
-    <table class="gtable" style="margin-top:12px"><tr><th>Accommodation type</th><th>Use when… (match the amenities on the provider page / OTAs)</th></tr>
-      <tr><td>Hotel</td><td>Front desk, rooms, daily service — the default for most properties.</td></tr>
-      <tr><td>Resort</td><td>Leisure property with extensive grounds/facilities (pools, spa, villas, activities).</td></tr>
-      <tr><td>B&amp;B / Inn</td><td>Small owner-run property, usually with breakfast.</td></tr>
-      <tr><td>Guest House / Hostel / Motel</td><td>Homestays &amp; small guest houses · dorm-style budget beds · roadside drive-up rooms.</td></tr>
-      <tr><td>Specialty Lodging</td><td>Treehouses, cave hotels, eco-lodges, cabins, ryokans, houseboats.</td></tr>
-      <tr><td>Apartment Hotel / Campground</td><td>Serviced apartments &amp; studios with housekeeping · glamping, camps.</td></tr>
-      <tr><td>Not applicable</td><td>The business has no bookable rooms (café, coworking, venue, monument, travel agency).</td></tr>
+  </div>
+
+  <div class="gsec"><h3><span class="n">4</span>Decision matrix: pick ONE action per case</h3>
+    <table class="gtable">
+      <tr><th style="width:170px">Action</th><th>When to use it</th><th style="width:300px">Reasons</th></tr>
+      <tr><td>${dchip('approve')}</td><td>The property exists, is open, is an accommodation, is not on Tripadvisor yet, and the sources agree.</td><td>New property verified</td></tr>
+      <tr><td>${dchip('reject')}</td><td>The red ⊗ button opens the reject menu. Pick the reason that fits.</td><td>${rejectList}</td></tr>
+      <tr><td>${dchip('t1')}</td><td>You can escalate when:<ul class="esc-list"><li>You need help as you're unsure what action to take</li><li>You have a weird case or situation</li><li>Conflicting information (such as geo, address)</li></ul></td><td>Unsure what action to take · Weird case or situation · Conflicting information</td></tr>
     </table>
   </div>
 
-  <div class="gsec"><h3><span class="n">4</span>Decision matrix — pick ONE action per case</h3>
-    <table class="gtable">
-      <tr><th style="width:170px">Action</th><th>When to use it</th><th style="width:260px">Reasons</th></tr>
-      <tr><td>${dchip('approve')}</td><td>Property exists, is open, is an accommodation, not on Tripadvisor yet, and sources agree.</td><td>New property – verified</td></tr>
-      <tr><td>${dchip('alias')}</td><td>Possible match / dupe: Tripadvisor already has it (same address + phone), even under another or older name. Click <b>Add name as alias</b> to apply the request to the current listing, edit what sources say is wrong, then ✔.</td><td>Match / dupe – applied to existing listing</td></tr>
-      <tr><td>${dchip('reject')}</td><td>The red ⊗ button opens the reject menu — pick the reason that fits.</td><td>Page down · Vacation Rental · Single unit property · Cannot verify · Property closed · Property removed from TA · Former name · More than 7 night stay required · Not open to public (restricted access) · Open less than 12 consecutive weeks · Not stationary (cruise) · Incorrect property type (not an accommodation)</td></tr>
-      <tr><td>${dchip('t1')}</td><td>Real property, but sources conflict (address, phone, location) and you can't decide which is right.</td><td>Conflicting data · Location unconfirmed</td></tr>
-      <tr><td>${dchip('t2')}</td><td>Fraud/scam signals, brand or ownership disputes, safety or legal issues. Never just reject these.</td><td>Fraud · Brand dispute · Safety/legal</td></tr>
-      <tr><td>${dchip('defer')}</td><td>Real but not open yet — capture data incl. Opening Date and keep it In Progress.</td><td>Pre-opening</td></tr>
-    </table>
-  </div>
-
-  <div class="gsec"><h3><span class="n">5</span>Scoring &amp; XP</h3>
-    <table class="gtable">
-      <tr><th>Component</th><th>Points</th><th>Notes</th></tr>
-      <tr><td>Correct action</td><td>30</td><td>Wrong action = only 30% of your data-capture score. Approving a duplicate, closed, fake or escalation case, or applying a request to a <b>different</b> property's listing = <b>critical error, 0 points</b>.</td></tr>
-      <tr><td>Correct reason</td><td>10</td><td>Automatic for Approve / Alias.</td></tr>
-      <tr><td>Data capture</td><td>60</td><td>Weighted field accuracy: Name 10 · Parent 8 · Type 8 · Street 6 · Phone 6 · Geo 6 · Postal/Email/URL/Rooms/Brand/Opening 4 · Street Two/Floors/All-incl. 2. For Alias it's the existing listing's values after your edits; for Reject/Escalate it's earned by the correct action.</td></tr>
-      <tr><td>XP bonuses</td><td>+5 … +40</td><td>Speed (≤6 min +15, ≤10 min +5) and a streak of ≥80% cases (+5 per case in a row, max +25).</td></tr>
-    </table>
-    <p style="font-size:12.5px;color:#6b7785;margin:10px 0 0">Badges: 💎 Flawless · 🎯 Geo Sniper · 🕵️ Fraud Hound · 🧬 Duplicate Detective · ⚡ Speed Runner · 🔥 Hot Streak · 🛡️ Zero Critical.</p>
+  <div class="gsec"><h3><span class="n">5</span>Scoring</h3>
+    <ul class="rules one-col">
+      <li><b>${APP_CONFIG.PASS_MARK}%</b> is required to get the certificate.</li>
+      <li>Every question you answer right gets <b>10 points</b>.</li>
+    </ul>
   </div>
 
   <div class="guide-cta">
@@ -601,7 +626,7 @@ function scoreField(k, expRaw, f, tol) {
   for (const e0 of exps) {
     const e = e0 == null ? '' : String(e0).trim();
     let r;
-    if (e === '') r = given === '' ? res(1) : res(0, 'Should be blank – no reliable source shows this');
+    if (e === '') r = given === '' ? res(1) : (k === 'url' && SOCIAL_RX.test(normUrl(given) + '/') ? res(1, 'Official social page accepted') : res(0, 'Should be blank – no reliable source shows this'));
     else if (given === '') r = res(0, 'Missing');
     else if (k === 'name' || k === 'street' || k === 'street2') {
       const a = k === 'name' ? norm(given) : normStreet(given), b = k === 'name' ? norm(e) : normStreet(e);
@@ -616,7 +641,7 @@ function scoreField(k, expRaw, f, tol) {
       else if (a0.length >= 7 && b.endsWith(a0)) r = res(.5, 'Missing country code – use international format');
       else r = res(0);
     } else if (k === 'email') r = given.toLowerCase() === e.toLowerCase() ? res(1) : res(0);
-    else if (k === 'url') r = normUrl(given) === normUrl(e) ? (/^https?:\/\//i.test(given) ? res(1) : res(.5, 'Start with https://')) : res(0);
+    else if (k === 'url') r = normUrl(given) === normUrl(e) ? res(1) : res(0);
     else if (k === 'postal') r = norm(given).replace(/ /g, '') === norm(e).replace(/ /g, '') ? res(1) : res(0);
     else if (k === 'rooms' || k === 'floors') r = parseInt(given, 10) === parseInt(e, 10) ? res(1) : res(0);
     else r = given === e ? res(1) : res(0);
@@ -625,41 +650,41 @@ function scoreField(k, expRaw, f, tol) {
   best.exp = expShow; return best;
 }
 
+/* v2.5 SCORING — every question is right (10 points) or wrong (0).
+   Right = correct action AND every primary field correct: Property Name, Street One, Geo, URL
+   (only the ones the answer key defines). Other fields are not evaluated.
+   Reject / Escalate cases: the action decides. Alias: the request must be applied to the right listing. */
+const PRIMARY_FIELDS = ['name', 'street', 'geo', 'url'];
+const SOCIAL_RX = /(^|\.)(facebook|fb|instagram|twitter|x)\.com\//i;
 function scoreCase(c, cs, dec) {
   const A = c.ans, f = cs.f;
   const expD = A.decision, decisionOk = dec.decision === expD;
   const reasons = [].concat(A.reason);
   const reasonOk = decisionOk && (['approve', 'alias'].includes(expD) || reasons.includes(dec.reason));
-  const mode = expD === 'alias' ? 'match' : ['reject', 't1', 't2'].includes(expD) ? 'decision' : 'fields';
+  const mode = expD === 'alias' ? 'match' : ['reject', 't1'].includes(expD) ? 'decision' : 'fields';
   const fields = [];
-  let earned = 0, possible = 0;
-  for (const d of FIELD_DEFS) {
-    const exp = d.k === 'geo' ? { lat: A.lat, lng: A.lng } : A[d.k];
+  for (const k of PRIMARY_FIELDS) {
+    const d = FIELD_DEFS.find(x => x.k === k);
+    const exp = k === 'geo' ? (A.lat === undefined || A.lat === null || A.lat === '' ? undefined : { lat: A.lat, lng: A.lng }) : A[k];
     if (exp === undefined || exp === null) continue;
-    const r = scoreField(d.k, exp, f, c.geoTol);
-    const given = d.k === 'geo' ? (f.lat !== '' ? `${f.lat}, ${f.lng}` : '') : d.k === 'parent' ? geoLabel(f.parent) : d.k === 'allIncl' ? (f.allIncl ? 'Yes' : 'No') : f[d.k];
-    const expShow = d.k === 'parent' ? geoLabel(first(exp)) : d.k === 'allIncl' ? (exp ? 'Yes' : 'No') : r.exp;
-    fields.push({ k: d.k, label: d.label, w: d.w, status: r.status, frac: r.frac, note: r.note, exp: expShow, given: given == null || given === '' ? '(blank)' : String(given), dist: r.dist });
-    earned += d.w * r.frac; possible += d.w;
+    const r = scoreField(k, exp, f, c.geoTol), ok = r.frac >= 1;
+    const given = k === 'geo' ? (f.lat !== '' ? `${f.lat}, ${f.lng}` : '') : f[k];
+    fields.push({ k, label: k === 'name' ? 'Property Name' : d.label, w: d.w, status: ok ? 'ok' : 'wrong', frac: ok ? 1 : 0, note: r.note, exp: r.exp, given: given == null || given === '' ? '(blank)' : String(given), dist: r.dist });
   }
-  const fieldsPct = possible ? earned / possible : 1;
-  // Alias: the request must be applied to the right existing listing; then the listing's edited values are scored
+  const fieldsOk = fields.filter(x => x.status === 'ok').length, fieldsN = fields.length;
+  const fieldsPct = fieldsN ? fieldsOk / fieldsN : 1;
   let matchOk = false;
   if (dec.decision === 'alias') {
     const got = taId(dec.match), want = taId(A.match);
     matchOk = expD === 'alias' && (want ? got === want : !!got || !!dec.match);
   }
-  let score, critical = false;
-  if (decisionOk) {
-    const capture = mode === 'fields' ? fieldsPct : mode === 'match' ? (matchOk ? fieldsPct : 0) : 1;
-    score = 30 + (reasonOk ? 10 : 0) + 60 * capture;
-  } else {
-    score = 30 * fieldsPct;
-    if (dec.decision === 'approve' && ['reject', 't2', 't1', 'alias'].includes(expD)) { critical = true; score = 0; }
-    if (dec.decision === 'reject' && expD === 't2') { critical = true; score = 0; }
-    if (dec.decision === 'alias' && expD === 'approve') { critical = true; score = 0; } // merged a different property into an existing listing
+  const correct = decisionOk && (mode === 'decision' || fieldsOk === fieldsN) && (expD !== 'alias' || matchOk);
+  let critical = false;
+  if (!decisionOk) {
+    if (dec.decision === 'approve' && ['reject', 't1', 'alias'].includes(expD)) critical = true;
+    if (dec.decision === 'alias' && expD === 'approve') critical = true; // merged a different property into an existing listing
   }
-  return { score: Math.round(score), decisionOk, reasonOk, matchOk, mode, fields, fieldsPct, critical };
+  return { score: correct ? 100 : 0, points: correct ? 10 : 0, correct, decisionOk, reasonOk, matchOk, mode, fields, fieldsPct, fieldsOk, fieldsN, critical };
 }
 
 /* =====================================================================
@@ -689,7 +714,7 @@ function SRC(c) {
 function amenitiesFor(c) {
   if (Array.isArray(c.amen) && c.amen.length) return c.amen;
   const A = c.ans || {}, P = typeof AMENITY_PROFILES !== 'undefined' ? AMENITY_PROFILES : {};
-  if (['reject', 't2'].includes(A.decision) && A.reason !== 'closed') return (A.reason === 'not_accommodation' ? P.none : P.claimed) || [];
+  if (['reject', 't1', 't2'].includes(A.decision) && A.reason !== 'closed') return (A.reason === 'not_accommodation' ? P.none : P.claimed) || [];
   return P[first(A.type)] || P.claimed || [];
 }
 
@@ -780,7 +805,7 @@ function matchBox() {
     new: ['pm-new', '✖ <b>Marked as not a match</b> — you are creating a new listing. (Changed your mind? Click ＋ Add name as alias.)'] }[cs.link];
   return `<div class="pm-box ${st[0]}"><div class="pm-h">${ICO.link} Possible match on Tripadvisor</div>
     <table class="pm-tbl"><thead><tr><th>Location ID</th><th>Name</th><th>Address</th><th>Parent</th><th>Type</th><th>Lat / Long</th><th>Distance from request pin</th><th></th></tr></thead>
-    <tbody><tr><td><code>${esc(L.id)}</code></td><td><b>${esc(L.name || '')}</b></td><td>${esc([L.street, L.street2, L.postal].filter(Boolean).join(', '))}</td><td>${esc(geoLabel(L.parent))}</td><td>${esc(L.type || '—')}</td><td style="white-space:nowrap">${esc(L.lat)}, ${esc(L.lng)}</td><td>${ds}</td>
+    <tbody><tr><td><code>${esc(L.id)}</code></td><td><b>${esc(L.name || '')}</b></td><td>${esc([L.street, L.street2, L.postal].filter(Boolean).join(', '))}</td><td>${esc(geoTplLabel(L.parent))}</td><td>${esc(L.type || '—')}</td><td style="white-space:nowrap">${esc(L.lat)}, ${esc(L.lng)}</td><td>${ds}</td>
     <td><a href="${esc(L.taUrl)}" target="_blank" rel="noopener">View on Tripadvisor ↗</a></td></tr></tbody></table>
     <div class="pm-note">${st[1]}</div></div>`;
 }
@@ -890,7 +915,7 @@ function aliasRows() {
 function renderPage() {
   const c = curCase(), cs = S.cs, F = c.feed, src = SRC(c);
   if (S.map) { try { S.map.remove(); } catch (e) { } S.map = null; S.marker = null; }
-  const pLabel = cs.f.parent ? geoLabel(cs.f.parent) : (cs.parentQ != null ? cs.parentQ : (F.parentText || ''));
+  const pLabel = cs.f.parent ? geoTplLabel(cs.f.parent) : (cs.parentQ != null ? cs.parentQ : (F.parentText || ''));
   const thumbs = ['linear-gradient(135deg,#3a7bd5,#00d2ff)', 'linear-gradient(135deg,#f7971e,#ffd200)', 'linear-gradient(135deg,#11998e,#38ef7d)', 'linear-gradient(135deg,#8e2de2,#4a00e0)'];
   const tl = ['Exterior', 'Lobby', 'Room', 'Pool / view'];
   const provOpts = (typeof PROVIDER_ATTRIBUTIONS !== 'undefined' ? PROVIDER_ATTRIBUTIONS : ['Hopper']);
@@ -903,7 +928,7 @@ function renderPage() {
     ${row({ key: 'street', label: 'Street One', feed: F.street, input: txt('street') })}
     ${row({ key: 'street2', label: 'Street Two', feed: F.street2, input: txt('street2') })}
     ${row({ key: 'postal', label: 'Postal Code', feed: F.postal, input: txt('postal', 'w-sm') })}
-    ${row({ key: 'parent', label: 'Parent', reqd: true, act: false, input: `<div class="parent-box"><div class="pb-wrap"><input type="text" id="parentShow" class="${cs.f.parent ? 'ok' : ''}" value="${esc(pLabel)}" placeholder="Type a city, town or village" autocomplete="off" spellcheck="false"><div id="parentDrop" class="parent-drop hidden"></div></div><button class="ibtn pb-search" data-parent="1" title="Search">🔍</button></div>`, msg: cs.f.parent ? '' : 'Please search for and select a parent' })}
+    ${row({ key: 'parent', label: 'Parent', reqd: true, act: false, input: `<div class="parent-box"><div class="pb-wrap"><input type="text" id="parentShow" class="${cs.f.parent ? 'ok' : ''}" value="${esc(pLabel)}" placeholder="Type a place or geo code" autocomplete="off" spellcheck="false"><div id="parentDrop" class="parent-drop hidden"></div></div><button class="ibtn pb-search" data-parent="1" title="Search">🔍</button></div>`, msg: cs.f.parent ? '' : 'Please search for and select a parent' })}
     ${row({ key: 'linked', label: 'Linked Locations', lock: false, act: false, input: `<div style="display:flex;gap:6px;flex-wrap:wrap"><select data-inert="1"><option>Select a relationship</option><option>Part of</option><option>Near</option></select><input type="text" data-inert="1" placeholder="Search for a location by name" style="max-width:200px"><button class="ibtn" style="background:#b39ddb;color:#fff;width:28px" data-inert="1">+</button></div>` })}
     ${row({ key: 'vgeo', label: 'Virtual Geos', lock: false, act: false, attr: false, input: `<div style="font-size:11.5px;color:#888">Virtual Geo · Link Information — none</div>` })}
   </div>
@@ -931,7 +956,7 @@ function renderPage() {
     ${row({ key: 'opening', label: 'Opening Date', lock: false, input: `<input type="date" data-f="opening" class="w-sm" value="${esc(cs.f.opening)}">` })}
     ${row({ key: 'floors', label: 'Floors', lock: false, input: `<input type="number" min="0" data-f="floors" class="w-xs" value="${esc(cs.f.floors)}">` })}
     ${row({ key: 'rooms', label: 'Rooms', feed: F.rooms, input: `<input type="number" min="0" data-f="rooms" class="w-xs" value="${esc(cs.f.rooms)}">` })}
-    ${row({ key: 'type', label: 'Accommodation Type', reqd: true, input: `<select data-f="type" class="${cs.f.type ? '' : 'invalid'}"><option value="">Select Type …</option>${ACCOM_TYPES.map(t => `<option${t === cs.f.type ? ' selected' : ''}>${esc(t)}</option>`).join('')}<option value="N/A"${cs.f.type === 'N/A' ? ' selected' : ''}>Not applicable (no rooms)</option></select>`, msg: cs.f.type ? '' : 'Please select an accommodation type' })}
+    ${row({ key: 'type', label: 'Accommodation Type', reqd: true, input: `<select data-f="type" class="${cs.f.type ? '' : 'invalid'}"><option value="">Select Type …</option>${ACCOM_TYPES.map(t => `<option${t === cs.f.type ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select>`, msg: cs.f.type ? '' : 'Please select an accommodation type' })}
     ${row({ key: 'allIncl', label: 'AllInclusive', lock: false, input: `<input type="checkbox" data-f="allIncl" ${cs.f.allIncl ? 'checked' : ''}>` })}
     ${row({ key: 'star', label: 'Star Rating', lock: false, act: false, input: `<div class="star-tbl"><span>Priority</span><span>Source</span><span>Rating</span></div><div style="font-size:11.5px;color:#999;padding:4px 10px">No star ratings on record</div>` })}
   </div>
@@ -957,9 +982,6 @@ function renderPage() {
         <button class="btn-apply" id="geoGo">📍 Move pin</button><button class="btn-apply" id="geoPaste">⇩ Paste "lat, lng"</button><button class="btn-apply" id="geoReset">↺ Reset to feed</button>
         <span style="font-size:11.5px;color:#777">Tip: click the map, drag the marker, or paste coordinates copied from Google Maps.</span></div>
       <div id="map"></div>
-      <table class="geo-tbl"><thead><tr><th>Source</th><th>Last Updated</th><th>Latitude/Longitude</th></tr></thead><tbody>
-        <tr><td>Hopper feed</td><td>${esc(src.audit[0].date || '—')}</td><td>${F.lat}, ${F.lng}</td></tr>
-        <tr><td>Agent (you)</td><td id="geoState">${cs.applied.geo ? 'Applied' : 'Not applied'}</td><td id="geoNow">${esc(cs.f.lat)}, ${esc(cs.f.lng)}</td></tr></tbody></table>
     </div>
   </div>`;
   updateEndInfo();
@@ -978,19 +1000,59 @@ function initMap() {
     el.innerHTML = `<div class="map-fallback">🗺️<b>Map tiles unavailable (offline or blocked network).</b>Copy the coordinates from Google Maps into the boxes above, then click Apply.</div>`;
     return;
   }
-  S.map = L.map(el, { worldCopyJump: true, scrollWheelZoom: false }).setView(ok ? [lat, lng] : [20, 0], ok ? 15 : 2);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' }).addTo(S.map);
+  S.map = L.map(el, { worldCopyJump: true, scrollWheelZoom: false, maxZoom: 20 }).setView(ok ? [lat, lng] : [20, 0], ok ? 15 : 2);
+  addMapTiles(S.map, el);
   const icon = L.divIcon({ className: '', html: '<div class="pin-icon"></div>', iconSize: [26, 26], iconAnchor: [13, 30] });
   S.marker = L.marker(ok ? [lat, lng] : [20, 0], { draggable: true, icon }).addTo(S.map);
-  const set = (la, ln) => { cs.f.lat = la.toFixed(6); cs.f.lng = ln.toFixed(6); $('#geoLat').value = cs.f.lat; $('#geoLng').value = cs.f.lng; $('#geoNow').textContent = cs.f.lat + ', ' + cs.f.lng; cs.applied.geo = false; refreshApplyBtn('geo'); };
+  const set = (la, ln) => { cs.f.lat = la.toFixed(6); cs.f.lng = ln.toFixed(6); $('#geoLat').value = cs.f.lat; $('#geoLng').value = cs.f.lng; cs.applied.geo = false; refreshApplyBtn('geo'); };
   S.marker.on('dragend', e => { const p = e.target.getLatLng(); set(p.lat, p.lng); });
   S.map.on('click', e => { S.marker.setLatLng(e.latlng); set(e.latlng.lat, e.latlng.lng); });
   setTimeout(() => S.map && S.map.invalidateSize(), 150);
 }
+/* Street map with automatic fallback + Map / Satellite switch.
+   A tile server counts as blocked when 3 tiles fail before any loads; the next server in
+   APP_CONFIG.MAP_TILES is then used, and remembered for the rest of the session. */
+let TILE_IDX = 0;
+function addMapTiles(map, el) {
+  const list = (APP_CONFIG.MAP_TILES || []).filter(t => t && t.url);
+  const sat = APP_CONFIG.MAP_SATELLITE;
+  const ctl = L.control.layers(null, null, { position: 'topright', collapsed: false });
+  let satGroup = null;
+  const note = msg => { let n = el.querySelector('.map-note'); if (!n) { n = document.createElement('div'); n.className = 'map-note'; el.appendChild(n); } n.innerHTML = msg; };
+  const street = idx => {
+    const t = list[idx];
+    const layer = L.tileLayer(t.url, { subdomains: t.subdomains || 'abc', maxZoom: 20, maxNativeZoom: t.maxNativeZoom || 18, attribution: t.attribution || '' });
+    let loads = 0, errs = 0;
+    layer.on('tileload', () => { loads++; TILE_IDX = idx; const n = el.querySelector('.map-note'); if (n) n.remove(); });
+    layer.on('tileerror', () => {
+      errs++;
+      if (loads || errs < 3 || layer._lmtDead || S.map !== map) return;
+      layer._lmtDead = true;
+      const wasOn = map.hasLayer(layer);
+      ctl.removeLayer(layer); if (wasOn) map.removeLayer(layer);
+      if (idx + 1 < list.length) {
+        const nx = street(idx + 1); ctl.addBaseLayer(nx, 'Map');
+        if (satGroup) { ctl.removeLayer(satGroup); ctl.addBaseLayer(satGroup, 'Satellite'); } // keep "Map · Satellite" order
+        if (wasOn) nx.addTo(map); TILE_IDX = idx + 1;
+      }
+      else note('🗺️ <b>Map tiles are blocked on this network.</b> The pin still works: paste the coordinates from Google Maps into the Latitude / Longitude boxes.');
+    });
+    return layer;
+  };
+  if (list.length) { const s = street(Math.min(TILE_IDX, list.length - 1)); s.addTo(map); ctl.addBaseLayer(s, 'Map'); }
+  if (sat && sat.url) {
+    const parts = [L.tileLayer(sat.url, { maxZoom: 20, maxNativeZoom: sat.maxNativeZoom || 18, attribution: sat.attribution || '' })];
+    if (sat.labels) parts.push(L.tileLayer(sat.labels, { maxZoom: 20, maxNativeZoom: sat.maxNativeZoom || 18 }));
+    const g = satGroup = L.layerGroup(parts);
+    ctl.addBaseLayer(g, 'Satellite');
+    if (!list.length) g.addTo(map);
+  }
+  ctl.addTo(map);
+}
 function moveMarker() {
   const cs = S.cs, la = parseFloat(cs.f.lat), ln = parseFloat(cs.f.lng);
   if (isNaN(la) || isNaN(ln) || Math.abs(la) > 90 || Math.abs(ln) > 180) return toast('⚠ Enter a valid latitude (−90…90) and longitude (−180…180)');
-  $('#geoNow').textContent = la + ', ' + ln;
+  if ($('#geoNow')) $('#geoNow').textContent = la + ', ' + ln;
   if (S.map) { S.marker.setLatLng([la, ln]); S.map.setView([la, ln], 16); }
 }
 function refreshApplyBtn(sec) {
@@ -1104,6 +1166,7 @@ async function geoSearchOnline(raw) {
     try { const r = await GEO_PROVIDERS[p](text, cc, cfg); if (r.length) { got = r; break; } got = got || r; } catch (e) { lastErr = e; console.warn('geo search via ' + p + ' failed', e); }
   }
   if (!got && lastErr) throw lastErr;
+  (got || []).forEach(g => { if (!g.nav) g.nav = String(g.path || '').split(',').map(x => x.trim()).filter(Boolean).reverse().concat(g.name).join(', '); });
   GEO_CACHE[key] = got || []; return GEO_CACHE[key];
 }
 
@@ -1135,29 +1198,36 @@ function geoMatch(a, b) {
 
 /* Parent field = an inline search bar (like the live LMT): type in the box → click 🔍 (or Enter) →
    pick from the dropdown under the box. Editing the text after picking clears the selection. */
+const geoCodeQuery = q => { const m = String(q || '').trim().match(/^g?(\d{3,})$/i); return m ? m[1] : ''; };
 function localGeoHits(q) {
+  const code = geoCodeQuery(q);
+  if (code) return GEOS.filter(g => String(g.ta) === code);              // search by Tripadvisor geo code, e.g. 297586
   const toks = norm(q).split(' ').filter(t => t.length > 2); // skip 2-letter country codes like "IN"
   return GEOS.filter(g => !String(g.id).startsWith('osm_') && !String(g.id).startsWith('gn_')).map(g => {
-    const hay = norm(g.name + ' ' + g.path); let sc = 0;
+    const hay = norm((g.nav || '') + ' ' + g.name + ' ' + g.path + ' ' + (g.ta || '')); let sc = 0;
     toks.forEach(t => { if (hay.split(' ').includes(t)) sc += 2; else if (hay.includes(t)) sc += 1; });
     return { g, sc };
   }).filter(x => x.sc > 0).sort((a, b) => b.sc - a.sc).slice(0, 12).map(x => x.g);
 }
-const parentItem = (g, tag) => { PARENT_RESULTS[g.id] = g; return `<div class="parent-res" data-pick="${esc(g.id)}"><code>${esc(tag)}</code><b>${esc(g.name)}</b><small>${esc(g.path || '')}</small></div>`; };
+const parentItem = g => { PARENT_RESULTS[g.id] = g; return `<div class="parent-res" data-pick="${esc(g.id)}"><code>${esc(g.ta ? g.ta : (g.kind || 'place'))}</code><b>${esc(g.nav || g.name)}</b>${g.ta ? '' : '<small>Not a Tripadvisor geo code (OpenStreetMap result)</small>'}</div>`; };
 let parentSeq = 0;
 function drawParentDrop(q, online, status) {
   const d = $('#parentDrop'); if (!d) return;
-  const loc = localGeoHits(q), on = online || [];
-  const locOnly = loc.filter(g => !on.some(o => geoMatch(o, g)));
-  const items = on.map(g => parentItem(g, g.kind || 'place')).join('') + locOnly.map(g => parentItem(g, g.noParent ? 'neighbourhood' : 'saved geo')).join('');
+  const loc = localGeoHits(q), on = (online || []).filter(o => !loc.some(g => geoMatch(o, g)));
+  const locOnly = loc;
+  const items = locOnly.map(g => parentItem(g)).join('') + on.map(g => parentItem(g)).join('');
   d.innerHTML = `<div class="pd-status">${status || ''}</div>${items || (online ? '<div class="pq-empty">No places found. Check the spelling, or try the nearest town.</div>' : '')}<div class="pd-hint">Pick the <b>most specific</b> geo — check the district, state and country.</div>`;
   d.classList.remove('hidden'); d.dataset.active = '-1';
 }
 async function searchParent() {
   const inp = $('#parentShow'); if (!inp) return;
   const q = inp.value.trim();
-  if (q.length < 2) { toast('Type a city, town or village in the Parent box, then click 🔍'); inp.focus(); return; }
+  if (q.length < 2) { toast('Type a city, town, village or geo code in the Parent box, then click 🔍'); inp.focus(); return; }
   const my = ++parentSeq;
+  if (geoCodeQuery(q)) {                    // geo codes are Tripadvisor ids — only the simulator's geo list knows them
+    const hit = localGeoHits(q).length;
+    return drawParentDrop(q, [], hit ? '' : `No geo with code ${esc(geoCodeQuery(q))} in the simulator. Try the place name.`);
+  }
   drawParentDrop(q, null, '<span class="spin"></span> Searching all places…');
   let online = [], status = '';
   try { online = await geoSearchOnline(q); status = online.length ? `${online.length} place(s) found for “${esc(q)}”` : ''; }
@@ -1223,9 +1293,9 @@ function openDecision(pre) {
     const reasons = Object.entries(REASONS).filter(([, r]) => r.d === sel);
     $('#mDecisionBox').innerHTML = `<div class="modal-h"><h3>⚖️ Take action on request ${c.req}</h3><button class="x" data-close="mDecision">✕</button></div>
       <div class="modal-b">
-        <div class="dgrid">${Object.entries(DECISIONS).map(([k, d]) => `<button class="dopt ${sel === k ? 'sel' : ''}" data-dsel="${k}"><span class="ic" style="background:${d.color}">${d.icon}</span><span><b>${d.label}</b><small>${({ approve: 'New, real, open accommodation', alias: 'Possible match / dupe on Tripadvisor', reject: 'Closed / not lodging / VR / cannot verify', t1: 'Conflicting data', t2: 'Fraud / brand / legal / safety', defer: 'Not open yet' })[k]}</small></span></button>`).join('')}</div>
+        <div class="dgrid">${Object.entries(DECISIONS).map(([k, d]) => `<button class="dopt ${sel === k ? 'sel' : ''}" data-dsel="${k}"><span class="ic" style="background:${d.color}">${d.icon}</span><span><b>${d.label}</b><small>${({ approve: 'New, real, open accommodation', alias: 'Possible match / dupe on Tripadvisor', reject: 'Closed / not lodging / VR / cannot verify', t1: 'Unsure · weird case · conflicting info', defer: 'Not open yet' })[k]}</small></span></button>`).join('')}</div>
         ${sel && !['approve', 'alias'].includes(sel) ? `<label class="mlabel">Reason *</label><select class="mselect" id="dReason"><option value="">— Select reason —</option>${reasons.map(([k, r]) => `<option value="${k}">${esc(r.label)}</option>`).join('')}</select>` : ''}
-        ${sel === 'alias' ? (L ? `<label class="mlabel">Existing listing the request is applied to</label><div class="pm-sum"><code>${esc(L.id)}</code> <b>${esc(L.name || '')}</b> · ${esc(geoLabel(L.parent))} <a href="${esc(L.taUrl)}" target="_blank" rel="noopener">View ↗</a>${cs.link === 'new' ? '<div style="color:#b26a00;font-size:12px;margin-top:4px">You marked this listing “Not match”. Submitting Alias applies the request to it anyway.</div>' : ''}<div style="font-size:12px;color:#6b7785;margin-top:4px">The values you edited on the page are saved to this listing, and the feed name is kept as an alias.</div></div>`
+        ${sel === 'alias' ? (L ? `<label class="mlabel">Existing listing the request is applied to</label><div class="pm-sum"><code>${esc(L.id)}</code> <b>${esc(L.name || '')}</b> · ${esc(geoTplLabel(L.parent))} <a href="${esc(L.taUrl)}" target="_blank" rel="noopener">View ↗</a>${cs.link === 'new' ? '<div style="color:#b26a00;font-size:12px;margin-top:4px">You marked this listing “Not match”. Submitting Alias applies the request to it anyway.</div>' : ''}<div style="font-size:12px;color:#6b7785;margin-top:4px">The values you edited on the page are saved to this listing, and the feed name is kept as an alias.</div></div>`
           : `<label class="mlabel">Existing Tripadvisor listing (no possible match was shown)</label><input class="mselect" id="dMatch" value="${esc(matchVal)}" placeholder="Paste the Tripadvisor link or location ID of the listing you found"><div style="font-size:11.5px;color:#6b7785;margin-top:4px">Only needed when LMT showed no possible match and you found the dupe on tripadvisor.com yourself.</div>`) : ''}
         ${sel ? `<label class="mlabel">Agent notes (optional) <span style="font-weight:500;color:#8a96a3">— pre-filled from your Internal Comment</span></label><textarea class="mtext" id="dNotes" placeholder="What evidence did you rely on? (links, what you saw)">${esc(cs.notes || cs.f.internal)}</textarea>` : '<p style="color:#6b7785;font-size:13px;margin:14px 0 0">Select an action above.</p>'}
         <div class="err-msg" id="dErr" style="margin-top:8px"></div>
@@ -1239,12 +1309,85 @@ function openDecision(pre) {
       const err = msg => { $('#dErr').textContent = msg; };
       if (!['approve', 'alias'].includes(sel) && !reason) return err('Select a reason.');
       if (sel === 'alias' && !match) return err('Paste the Tripadvisor link of the listing you found.');
+      if ((sel === 'approve' || sel === 'alias') && !cs.f.type) return err('Select an Accommodation Type first. A listing cannot be saved without one.');
       // v2.2: no other blocking checks — Apply is optional and empty/unapplied fields are simply scored.
       closeModal('mDecision');
       submitCase({ decision: sel, reason, match, notes: notes.trim() });
     };
   };
   draw(); openModal('mDecision');
+}
+
+/* ---------------- everything the agent saved (v2.6) ----------------
+   Only the 4 primary fields are scored, but every field on the listing is stored with the answer:
+   shown after Take Action (next to the answer key, for coaching), in Review, in the Admin Portal and
+   as "Entered …" columns in the Question_Log tab of the Google Sheet. */
+const ENTRY_FIELDS = [
+  // [form key, label, Question_Log key]
+  ['name', 'Property Name', 'entName'], ['former', 'Former Name', 'entFormer'], ['brand', 'Brand', 'entBrand'],
+  ['street', 'Street One', 'entStreet'], ['street2', 'Street Two', 'entStreet2'], ['postal', 'Postal Code', 'entPostal'],
+  ['parent', 'Parent (geo code)', 'entParent'], ['phone', 'Phone', 'entPhone'], ['fax', 'Fax', 'entFax'], ['email', 'Email', 'entEmail'],
+  ['url', 'URL', 'entUrl'], ['desc', 'Description', 'entDesc'], ['thumb', 'Primary Thumbnail', 'entThumb'],
+  ['type', 'Accommodation Type', 'entType'], ['rooms', 'Rooms', 'entRooms'], ['floors', 'Floors', 'entFloors'],
+  ['opening', 'Opening Date', 'entOpening'], ['allIncl', 'All Inclusive', 'entAllIncl'],
+  ['provAttr', 'Provider Attribution', 'entProvAttr'], ['provExp', 'Attribution Expiration', 'entProvExp'],
+  ['internal', 'Internal Comment', 'internalComment'], ['aliases', 'Aliases', 'aliases'],
+  ['lat', 'Latitude', 'entLat'], ['lng', 'Longitude', 'entLng']
+];
+const ENTRY_SCORED = { name: 1, street: 1, url: 1, geo: 1 };
+function aliasText(cs) { return cs.aliases.filter(a => a.name.trim()).map(a => a.name.trim() + (a.searchable ? ' (searchable)' : '')).join(' ; '); }
+function entryValue(k, cs) {
+  const f = cs.f;
+  if (k === 'aliases') return aliasText(cs);
+  if (k === 'parent') return f.parent ? geoTplLabel(f.parent) : '';
+  if (k === 'allIncl') return f.allIncl ? 'Yes' : 'No';
+  if (k === 'type') return f.type === 'N/A' ? '' : (f.type || '');
+  const v = f[k]; return v == null ? '' : String(v).trim();
+}
+/* {entName: …, entStreet: …, internalComment: …, aliases: …, entLat: …} → sent to the Google Sheet */
+function entryCols(cs) {
+  const o = {};
+  ENTRY_FIELDS.forEach(([k, , col]) => { o[col] = entryValue(k, cs); });
+  return o;
+}
+/* Rows for the "Everything you saved" table: your value next to the answer key (reference only). */
+function entryRows(c, cs) {
+  const A = c.ans || {}, has = v => v !== undefined && v !== null;
+  const ref = k => {
+    if (k === 'parent') return has(A.parent) && [].concat(A.parent).length ? [].concat(A.parent).map(geoTplLabel).join('  or  ') : null;
+    if (k === 'allIncl') return A.allIncl === undefined ? null : A.allIncl ? 'Yes' : 'No';
+    if (k === 'lat' || k === 'lng') return null;
+    if (['former', 'desc', 'thumb', 'provAttr', 'provExp', 'internal', 'aliases', 'fax'].includes(k)) return null;
+    if (!has(A[k])) return null;
+    const vals = [].concat(A[k]).map(v => (v === '' ? '(blank)' : String(v)));
+    return vals.join('  or  ');
+  };
+  const rows = ENTRY_FIELDS.filter(([k]) => k !== 'lat' && k !== 'lng').map(([k, label]) => ({ k, label, given: entryValue(k, cs), exp: ref(k), scored: !!ENTRY_SCORED[k] }));
+  const geoAt = rows.findIndex(r => r.k === 'type') + 1;
+  const g = { k: 'geo', label: 'Geo Coding (lat, long)', given: cs.f.lat !== '' && cs.f.lng !== '' ? `${cs.f.lat}, ${cs.f.lng}` : '', exp: A.lat !== undefined && A.lat !== null && A.lat !== '' ? `${A.lat}, ${A.lng}` : null, scored: true };
+  rows.splice(geoAt, 0, g);
+  return rows;
+}
+/* Question_Log columns for one answer: every entered field + how far the pin was from the answer */
+function sheetEntry(r) {
+  const o = Object.assign({}, r.entryCols || {});
+  ['entLat', 'entLng'].forEach(k => { const n = parseFloat(o[k]); o[k] = isNaN(n) ? '' : n; });
+  const g = (r.fields || []).find(f => f.k === 'geo');
+  o.pinDistM = g && typeof g.dist === 'number' ? Math.round(g.dist) : '';
+  o.listing = r.decision === 'alias' ? 'Applied to existing listing' : r.decision === 'approve' ? 'New listing' : '';
+  return o;
+}
+function entryTableHtml(r) {
+  if (!r.entry || !r.entry.length) return '';
+  const res = {}; (r.fields || []).forEach(f => { res[f.k] = f.status; });
+  const scoredNow = r.mode !== 'decision';
+  return `<h4 style="margin:16px 0 4px">📋 Everything you saved on this listing</h4>
+    <p class="fb-sub">Saved with your answer and in the Google Sheet. ${scoredNow ? 'Only the ⭐ fields are scored' : 'On this case only the action is scored (⭐ fields are scored on Approve and Alias cases)'}. Every other field is not scored; the answer key column is there to help you learn.</p>
+    <div class="entry-wrap"><table class="fb-tbl entry-tbl"><tr><th style="width:170px">Field</th><th>You saved</th><th>Answer key</th></tr>
+    ${r.entry.map(e => {
+      const mark = e.scored && scoredNow && res[e.k] ? (res[e.k] === 'ok' ? ' <span class="ok-c">✔</span>' : ' <span class="bad-c">✖</span>') : '';
+      return `<tr class="${e.given ? '' : 'empty'}"><td>${e.scored ? '⭐ ' : ''}${esc(e.label)}</td><td class="${e.k === 'desc' || e.k === 'internal' ? 'long' : ''}">${e.given ? esc(e.given) : '<span class="muted">—</span>'}${mark}</td><td>${e.exp == null ? '<span class="muted">—</span>' : esc(e.exp)}</td></tr>`;
+    }).join('')}</table></div>`;
 }
 
 /* ---------------- submit / feedback ---------------- */
@@ -1262,34 +1405,37 @@ function submitCase(dec) {
     expectedDecision: c.ans.decision, decision: dec.decision, decisionOk: sc.decisionOk,
     expectedReason: [].concat(c.ans.reason).join('|'), reason: dec.reason, reasonOk: sc.reasonOk,
     expectedMatch: (() => { const L = listingFor(c); return c.ans.decision === 'alias' ? (L && L.isMatch ? L.id + ' · ' + (L.name || '') : (c.ans.match || '')) : ''; })(),
-    match: (() => { const L = listingFor(c); return dec.decision === 'alias' && L && dec.match === L.id ? L.id + ' · ' + (L.name || '') : dec.match; })(), matchOk: sc.matchOk, fieldsPct: Math.round(sc.fieldsPct * 100), score: sc.score,
+    match: (() => { const L = listingFor(c); return dec.decision === 'alias' && L && dec.match === L.id ? L.id + ' · ' + (L.name || '') : dec.match; })(), matchOk: sc.matchOk, fieldsPct: Math.round(sc.fieldsPct * 100), score: sc.score, points: sc.points, correct: sc.correct, fieldsOk: sc.fieldsOk, fieldsN: sc.fieldsN,
     xp, speed, streakB, timeSec, critical: sc.critical, notes: dec.notes, mode: sc.mode,
     showAll: cs.showAllUsed, showAllSec: cs.showAllSec, internal: (cs.f.internal || '').trim(),
-    aliases: cs.aliases.filter(a => a.name.trim()).map(a => a.name.trim() + (a.searchable ? ' (searchable)' : '')).join(' ; '),
-    fields: sc.fields.map(f => ({ k: f.k, label: f.label, status: f.status, given: f.given, exp: f.exp, note: f.note, dist: f.dist })), tip: c.tip
+    aliases: aliasText(cs),
+    fields: sc.fields.map(f => ({ k: f.k, label: f.label, status: f.status, given: f.given, exp: f.exp, note: f.note, dist: f.dist })), tip: c.tip,
+    link: cs.link, entry: entryRows(c, cs), entryCols: entryCols(cs)
   };
   S.results[S.idx] = r;
   renderHud();
   showFeedback(r, true);
-  if (sc.score >= 80) confetti(sc.score >= 95 ? 160 : 80);
+  if (sc.correct) confetti(120);
 }
 function feedbackHtml(r) {
-  const D = DECISIONS, color = r.score >= 80 ? 'var(--ok)' : r.score >= 50 ? '#b97a00' : 'var(--bad)';
-  const verdict = r.critical ? '🚨 Critical error' : r.score >= 95 ? '🏆 Perfect work!' : r.score >= 80 ? '✅ Great job' : r.score >= 50 ? '⚠️ Partly correct' : '❌ Needs review';
+  const D = DECISIONS, ok = r.correct !== undefined ? r.correct : r.score >= 80, pts = r.points !== undefined ? r.points : (ok ? 10 : 0);
+  const verdict = ok ? '✅ Correct · 10 points' : r.critical ? '🚨 Critical error · 0 points' : '❌ Not correct · 0 points';
   const reasonLbl = k => (REASONS[k] ? REASONS[k].label : (k || '—'));
-  const showFields = r.mode === 'fields' || r.mode === 'match' || !r.decisionOk;
-  return `<div class="fb-head"><div class="fb-score" style="color:${color}">${r.score}<small>/100</small></div><div class="fb-verdict">${verdict}</div>
+  const dl = k => D[k] || { icon: '', label: k || '—' };
+  return `<div class="fb-head"><div class="fb-score" style="color:${ok ? 'var(--ok)' : 'var(--bad)'}">${pts}<small>/10</small></div><div class="fb-verdict">${verdict}</div>
       <div class="fb-xp">+${r.xp} XP${r.speed ? ` · ⚡ +${r.speed}` : ''}${r.streakB ? ` · 🔥 +${r.streakB}` : ''}</div></div>
     <div class="modal-b">
+      <div class="fb-rule">A question earns 10 points only when the action <b>and</b> every scored field (Property Name, Street One, Geo, URL) are correct. One mistake = 0.</div>
       <table class="fb-tbl"><tr><th style="width:150px"></th><th>Your answer</th><th>Correct answer</th><th style="width:60px"></th></tr>
-        <tr><td><b>Action</b></td><td>${D[r.decision].icon} ${esc(D[r.decision].label)}</td><td>${D[r.expectedDecision].icon} ${esc(D[r.expectedDecision].label)}</td><td class="${r.decisionOk ? 'ok-c' : 'bad-c'}">${r.decisionOk ? '✔ 30' : '✖ 0'}</td></tr>
-        <tr><td><b>Reason</b></td><td>${esc(reasonLbl(r.reason))}</td><td>${esc(r.expectedReason.split('|').map(reasonLbl).join(' / '))}</td><td class="${r.reasonOk ? 'ok-c' : 'bad-c'}">${r.reasonOk ? '✔ 10' : '✖ 0'}</td></tr>
-        ${r.expectedDecision === 'alias' || r.decision === 'alias' ? `<tr><td><b>Existing listing</b></td><td style="word-break:break-all">${esc(r.decision === 'alias' ? (r.match || '—') : 'Not applied — you created a new listing')}</td><td style="word-break:break-all">${esc(r.expectedDecision === 'alias' ? (r.expectedMatch || 'The existing Tripadvisor listing') : 'None — this is a new property')}</td><td class="${r.matchOk ? 'ok-c' : 'bad-c'}">${r.matchOk ? '✔' : '✖'}</td></tr>` : ''}
-        <tr><td><b>Data capture</b></td><td colspan="2">${r.mode === 'match' ? (r.matchOk ? r.fieldsPct + '% accuracy on the existing listing after your edits' : 'Not scored — the request was not applied to the right listing') : r.mode === 'decision' && r.decisionOk ? 'Earned by the correct action' : r.fieldsPct + '% field accuracy'}</td><td></td></tr>
+        <tr><td><b>Action</b></td><td>${dl(r.decision).icon} ${esc(dl(r.decision).label)}</td><td>${dl(r.expectedDecision).icon} ${esc(dl(r.expectedDecision).label)}</td><td class="${r.decisionOk ? 'ok-c' : 'bad-c'}">${r.decisionOk ? '✔' : '✖'}</td></tr>
+        ${r.expectedDecision === 'alias' || r.decision === 'alias' ? `<tr><td><b>Existing listing</b></td><td style="word-break:break-all">${esc(r.decision === 'alias' ? (r.match || '—') : 'Not applied (you created a new listing)')}</td><td style="word-break:break-all">${esc(r.expectedDecision === 'alias' ? (r.expectedMatch || 'The existing Tripadvisor listing') : 'None (this is a new property)')}</td><td class="${r.matchOk ? 'ok-c' : 'bad-c'}">${r.matchOk ? '✔' : '✖'}</td></tr>` : ''}
+        <tr class="ns"><td><b>Reason</b> <small>(not scored)</small></td><td>${esc(reasonLbl(r.reason))}</td><td>${esc(String(r.expectedReason || '').split('|').map(reasonLbl).join(' / '))}</td><td></td></tr>
       </table>
-      ${r.critical ? `<div class="crit">🚨 ${r.decision === 'approve' ? 'You approved a listing that should not be created.' : r.decision === 'alias' ? 'You applied this request to a different property\'s listing — that overwrites a real listing with the wrong data.' : 'A fraud/legal case was rejected instead of escalated — the risk is never investigated.'} This scores 0.</div>` : ''}
-      ${showFields ? `<h4 style="margin:16px 0 4px">Field-by-field review</h4><table class="fb-tbl"><tr><th>Field</th><th>You entered</th><th>Expected</th><th>Result</th></tr>
-        ${r.fields.map(f => `<tr><td>${esc(f.label)}</td><td>${esc(f.given)}</td><td>${esc(f.exp)}</td><td class="${f.status === 'ok' ? 'ok-c' : f.status === 'partial' ? 'mid-c' : 'bad-c'}">${f.status === 'ok' ? '✔' : f.status === 'partial' ? '◐' : '✖'} <span style="font-weight:500;color:#555">${esc(f.note || '')}</span></td></tr>`).join('')}</table>` : ''}
+      ${r.critical ? `<div class="crit">🚨 ${r.decision === 'approve' ? 'You approved a listing that should not be created.' : 'You applied this request to a different property\'s listing. That overwrites a real listing with the wrong data.'}</div>` : ''}
+      ${r.mode !== 'decision' && r.fields.length ? `<h4 style="margin:16px 0 4px">Scored fields</h4><table class="fb-tbl"><tr><th>Field</th><th>You entered</th><th>Expected</th><th>Result</th></tr>
+        ${r.fields.map(f => `<tr><td>${esc(f.label)}</td><td>${esc(f.given)}</td><td>${esc(f.exp)}</td><td class="${f.status === 'ok' ? 'ok-c' : 'bad-c'}">${f.status === 'ok' ? '✔' : '✖'} <span style="font-weight:500;color:#555">${esc(f.note || '')}</span></td></tr>`).join('')}</table>`
+        : r.mode === 'decision' ? '<p style="font-size:12.5px;color:#6b7785;margin:12px 0 0">For Reject and Escalate cases only the action is scored.</p>' : ''}
+      ${entryTableHtml(r)}
       <div class="${r.showAll ? 'habit ok' : 'habit bad'}">👁 <b>Show All Fields:</b> ${r.showAll ? `used${r.showAllSec != null ? ' after ' + fmtTime(r.showAllSec) : ''} ✔` : 'not used ✖ — Phone, Fax, Email, Description and the Internal Comment stayed hidden. On the live LMT, click it first on every request.'}${r.internal ? '' : ' · <span style="color:#9a6a00">No Internal Comment written.</span>'}</div>
       <div class="tipbox">🎓 <b>Coach's note:</b> ${esc(r.tip)}</div>
     </div>`;
@@ -1304,20 +1450,20 @@ function showFeedback(r, live) {
 
 /* ---------------- finish day ---------------- */
 const BADGES = [
-  ['perfect', '💎', 'Flawless', 'Every case scored 90+'],
+  ['perfect', '💎', 'Flawless', 'Every case correct'],
   ['geo', '🎯', 'Geo Sniper', 'Every pin within tolerance'],
-  ['fraud', '🕵️', 'Fraud Hound', 'Escalated every Tier 2 case'],
+  ['fraud', '🕵️', 'Escalation Pro', 'Escalated every case that needed it'],
   ['dupe', '🧬', 'Duplicate Detective', 'Matched every duplicate'],
-  ['speed', '⚡', 'Speed Runner', 'Avg < 6 min with 80%+'],
-  ['streak', '🔥', 'Hot Streak', '5 cases in a row ≥ 80%'],
+  ['speed', '⚡', 'Speed Runner', 'Avg < 6 min with 80% correct'],
+  ['streak', '🔥', 'Hot Streak', '5 correct cases in a row'],
   ['safe', '🛡️', 'Zero Critical', 'No critical errors']
 ];
 function computeBadges(rs) {
   const got = new Set(), avg = rs.reduce((a, r) => a + r.score, 0) / rs.length, avgT = rs.reduce((a, r) => a + r.timeSec, 0) / rs.length;
-  if (rs.every(r => r.score >= 90)) got.add('perfect');
+  if (rs.every(r => r.score >= 100)) got.add('perfect');
   const geos = rs.flatMap(r => r.fields.filter(f => f.k === 'geo' && r.mode === 'fields'));
   if (geos.length && geos.every(g => g.status === 'ok')) got.add('geo');
-  const t2 = rs.filter(r => r.expectedDecision === 't2'); if (t2.length && t2.every(r => r.decisionOk)) got.add('fraud');
+  const esc1 = rs.filter(r => r.expectedDecision === 't1'); if (esc1.length && esc1.every(r => r.decisionOk)) got.add('fraud');
   const al = rs.filter(r => r.expectedDecision === 'alias'); if (al.length && al.every(r => r.decisionOk && r.matchOk)) got.add('dupe');
   if (avgT < 360 && avg >= 80) got.add('speed');
   if (S.bestStreak >= 5) got.add('streak');
@@ -1327,7 +1473,7 @@ function computeBadges(rs) {
 function finishDay() {
   clearInterval(S.timer);
   const rs = S.results, n = rs.length;
-  const total = rs.reduce((a, r) => a + r.score, 0), acc = Math.round(total / n);
+  const total = rs.reduce((a, r) => a + (r.points || 0), 0), acc = Math.round(total / (n * 10) * 100); // 10 points per correct question
   const passed = acc >= APP_CONFIG.PASS_MARK;
   const badges = computeBadges(rs);
   const prof = profile(); const prevXp = prof.xp;
@@ -1340,16 +1486,17 @@ function finishDay() {
     timestamp: finishedAt, attemptId: S.attemptId, trainingId: S.user.trainingId, name: S.user.name, country: S.user.country, trainer: S.user.trainer,
     wave: S.user.wave, session: S.user.session, day: S.user.day, attemptNo: prof.days[dk].attempts, startedAt: S.startedAt, finishedAt,
     durationSec: Math.round((Date.parse(finishedAt) - Date.parse(S.startedAt)) / 1000), questions: n, correctDecisions: rs.filter(r => r.decisionOk).length,
-    accuracy: acc, totalScore: total, maxScore: n * 100, xp: S.xp, level: `Lv ${L.n} · ${L.name}`, passed, badges: BADGES.filter(b => badges.has(b[0])).map(b => b[2]).join(', '),
+    accuracy: acc, totalScore: total, maxScore: n * 10, xp: S.xp, level: `Lv ${L.n} · ${L.name}`, passed, badges: BADGES.filter(b => badges.has(b[0])).map(b => b[2]).join(', '),
     criticalErrors: rs.filter(r => r.critical).length
   };
   const questions = rs.map(r => ({
     timestamp: finishedAt, attemptId: S.attemptId, trainingId: S.user.trainingId, name: S.user.name, trainer: S.user.trainer, wave: S.user.wave, day: S.user.day,
     qNo: r.qNo, caseId: r.caseId, hotel: r.hotel, expectedDecision: r.expectedDecision, decision: r.decision, decisionOk: r.decisionOk,
-    expectedReason: r.expectedReason, reason: r.reason, reasonOk: r.reasonOk, match: r.match, fieldsPct: r.fieldsPct, score: r.score, xp: r.xp,
+    expectedReason: r.expectedReason, reason: r.reason, reasonOk: r.reasonOk, match: r.match, fieldsPct: r.fieldsPct, score: r.points || 0, xp: r.xp,
     timeSec: r.timeSec, critical: r.critical, notes: r.notes,
     fieldDetail: r.fields.map(f => `${f.label}:${f.status === 'ok' ? '✔' : f.status === 'partial' ? '◐' : '✖'}`).join(' | '),
-    showAll: r.showAll ? 'Yes' : 'No', internalComment: r.internal || '', aliases: r.aliases || ''
+    showAll: r.showAll ? 'Yes' : 'No', internalComment: r.internal || '', aliases: r.aliases || '',
+    ...sheetEntry(r)
   }));
   saveAttempt(attempt, questions);
   renderResults(attempt, badges, levelUp);
@@ -1360,24 +1507,24 @@ function renderResults(a, badges, levelUp) {
   const avgT = Math.round(rs.reduce((s, r) => s + r.timeSec, 0) / rs.length);
   $('#resWrap').innerHTML = `
     <div class="res-hero ${a.passed ? 'pass' : 'fail'}"><div>
-      <h2>${a.passed ? '🏆 Mission complete — PASSED' : '📘 Mission complete — keep practising'}</h2>
+      <h2>${a.passed ? '🏆 Passed · certificate level reached' : '📘 Not passed yet · keep practising'}</h2>
       <div>${esc(S.user.name)} · ID ${esc(S.user.trainingId)} · Day ${S.user.day} · ${esc(dayMeta(S.user.day).title)}${S.user.wave ? ' · ' + esc(S.user.wave) : ''}</div>
-      <div style="margin-top:8px;opacity:.9">Pass mark ${APP_CONFIG.PASS_MARK}% · Attempt #${a.attemptNo} · ${a.level}${levelUp ? ' · 🎉 LEVEL UP!' : ''}</div></div>
-      <div class="ring"><b>${a.accuracy}%</b><span>accuracy</span></div></div>
+      <div style="margin-top:8px;opacity:.9">${APP_CONFIG.PASS_MARK}% needed for the certificate · 10 points per correct question · Attempt #${a.attemptNo} · ${a.level}${levelUp ? ' · 🎉 LEVEL UP!' : ''}</div></div>
+      <div class="ring"><b>${a.accuracy}%</b><span>${a.totalScore}/${a.maxScore} points</span></div></div>
     <div class="kpis">
       <div class="kpi"><span>Total score</span><b>${a.totalScore}/${a.maxScore}</b></div>
-      <div class="kpi"><span>Correct actions</span><b>${a.correctDecisions}/${a.questions}</b></div>
+      <div class="kpi"><span>Correct answers</span><b>${rs.filter(r => r.correct).length}/${a.questions}</b></div>
       <div class="kpi"><span>XP earned</span><b>⭐ ${a.xp}</b></div>
       <div class="kpi"><span>Avg time / case</span><b>${fmtTime(avgT)}</b></div>
       <div class="kpi"><span>Critical errors</span><b style="color:${a.criticalErrors ? 'var(--bad)' : 'inherit'}">${a.criticalErrors}</b></div>
     </div>
     <div class="badges">${BADGES.map(b => `<div class="badge ${badges.has(b[0]) ? '' : 'lockd'}" title="${esc(b[3])}"><i>${b[1]}</i><div><b>${b[2]}</b><div style="color:#6b7785;font-size:11.5px">${b[3]}</div></div></div>`).join('')}</div>
     <div class="tbl-card"><h3 style="margin:0 0 10px">Case-by-case scorecard</h3>
-      <table class="rtbl"><thead><tr><th>#</th><th>Property</th><th>Your action</th><th>Correct action</th><th>Reason</th><th>Data</th><th>Score</th><th>Time</th><th>XP</th><th></th></tr></thead><tbody>
+      <table class="rtbl"><thead><tr><th>#</th><th>Property</th><th>Your action</th><th>Correct action</th><th>Scored fields</th><th>Points</th><th>Time</th><th>XP</th><th></th></tr></thead><tbody>
       ${rs.map((r, i) => `<tr class="clk" data-review="${i}"><td>${r.qNo}</td><td><b>${esc(r.hotel)}</b><div style="font-size:11px;color:#888">${esc(r.caseId)}</div></td>
         <td>${D[r.decision].icon} ${D[r.decision].short}</td><td>${D[r.expectedDecision].icon} ${D[r.expectedDecision].short} ${r.decisionOk ? '<span class="ok-c">✔</span>' : '<span class="bad-c">✖</span>'}</td>
-        <td>${r.reasonOk ? '<span class="ok-c">✔</span>' : '<span class="bad-c">✖</span>'}</td><td>${r.mode !== 'decision' || !r.decisionOk ? r.fieldsPct + '%' : '—'}</td>
-        <td><b style="color:${r.score >= 80 ? 'var(--ok)' : r.score >= 50 ? '#b97a00' : 'var(--bad)'}">${r.score}</b>${r.critical ? ' 🚨' : ''}</td><td>${fmtTime(r.timeSec)}</td><td>${r.xp}</td><td><button class="btn btn-ghost btn-sm">Review</button></td></tr>`).join('')}
+        <td>${r.mode !== 'decision' && r.fieldsN ? `${r.fieldsOk}/${r.fieldsN} ${r.fieldsOk === r.fieldsN ? '<span class="ok-c">✔</span>' : '<span class="bad-c">✖</span>'}` : '—'}</td>
+        <td><b style="color:${r.correct ? 'var(--ok)' : 'var(--bad)'}">${r.points}/10</b>${r.critical ? ' 🚨' : ''}</td><td>${fmtTime(r.timeSec)}</td><td>${r.xp}</td><td><button class="btn btn-ghost btn-sm">Review</button></td></tr>`).join('')}
       </tbody></table>
       <div class="sync-line" id="syncLine">Saving results…</div></div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap">
@@ -1387,7 +1534,7 @@ function renderResults(a, badges, levelUp) {
   $$('[data-review]').forEach(tr => tr.onclick = () => showFeedback(S.results[+tr.dataset.review], false));
   $('#rRetry').onclick = () => showGuide();
   $('#rHome').onclick = () => { show('v-login'); loadConfig(); };
-  $('#rCsv').onclick = () => downloadCsv(`LMT_Day${S.user.day}_${S.user.trainingId}.csv`, S.results.map(r => ({ Case: r.qNo, CaseId: r.caseId, Property: r.hotel, YourAction: D[r.decision].label, CorrectAction: D[r.expectedDecision].label, ActionCorrect: r.decisionOk, ReasonCorrect: r.reasonOk, DataPct: r.fieldsPct, Score: r.score, TimeSec: r.timeSec, XP: r.xp })));
+  $('#rCsv').onclick = () => downloadCsv(`LMT_Day${S.user.day}_${S.user.trainingId}.csv`, S.results.map(r => Object.assign({ Case: r.qNo, CaseId: r.caseId, Property: r.hotel, YourAction: D[r.decision].label, CorrectAction: D[r.expectedDecision].label, ActionCorrect: r.decisionOk, ScoredFieldsCorrect: r.mode === 'decision' ? '' : r.fieldsOk + '/' + r.fieldsN, Points: r.points, TimeSec: r.timeSec, XP: r.xp }, Object.fromEntries(ENTRY_FIELDS.map(([, label, col]) => [label, (r.entryCols || {})[col] || ''])))));
   show('v-results');
 }
 
@@ -1453,7 +1600,7 @@ function bindGame() {
     if (t.id === 'alNew') { cs.aliasDraft = t.value; return; }
     if (t.id === 'parentShow') {
       cs.parentQ = t.value;
-      if (cs.f.parent && t.value !== geoLabel(cs.f.parent)) {
+      if (cs.f.parent && t.value !== geoTplLabel(cs.f.parent)) {
         cs.f.parent = ''; t.classList.remove('ok');
         const m = pane.querySelector('[data-msg="parent"]'); if (m) m.textContent = 'Please search for and select a parent';
       }
@@ -1563,7 +1710,7 @@ function bindGame() {
     const k = b.dataset.lb;
     if (k === 'B') jumpTo('sec-basic');
     else if (k === 'C') jumpTo('sec-contact');
-    else if (k === 'L') { const f = S.cs.f; generic('📄 Location summary (your current values)', `<table class="fb-tbl">${[['Name', f.name], ['Brand', f.brand], ['Street One', f.street], ['Street Two', f.street2], ['Postal', f.postal], ['Parent', geoLabel(f.parent)], ['Phone', f.phone], ['Email', f.email], ['URL', f.url], ['Type', f.type], ['Rooms', f.rooms], ['Floors', f.floors], ['Opening', f.opening], ['All-inclusive', f.allIncl ? 'Yes' : 'No'], ['Lat/Lng', f.lat + ', ' + f.lng]].map(([l, v]) => `<tr><td style="width:150px"><b>${l}</b></td><td>${esc(v || '—')}</td></tr>`).join('')}</table>`); }
+    else if (k === 'L') { const f = S.cs.f; generic('📄 Location summary (your current values)', `<table class="fb-tbl">${[['Name', f.name], ['Brand', f.brand], ['Street One', f.street], ['Street Two', f.street2], ['Postal', f.postal], ['Parent', geoTplLabel(f.parent)], ['Phone', f.phone], ['Email', f.email], ['URL', f.url], ['Type', f.type], ['Rooms', f.rooms], ['Floors', f.floors], ['Opening', f.opening], ['All-inclusive', f.allIncl ? 'Yes' : 'No'], ['Lat/Lng', f.lat + ', ' + f.lng]].map(([l, v]) => `<tr><td style="width:150px"><b>${l}</b></td><td>${esc(v || '—')}</td></tr>`).join('')}</table>`); }
     else if (k === 'LN') { generic('📝 Location notes', `<textarea class="mtext" id="lnText" style="min-height:140px" placeholder="Your research notes and links — these pre-fill the notes in the action dialog.">${esc(S.cs.notes)}</textarea>`, '<button class="btn btn-pri" id="lnSave">Save notes</button>'); $('#lnSave').onclick = () => { S.cs.notes = $('#lnText').value; closeModal('mGeneric'); toast('📝 Notes saved'); }; }
   });
   document.addEventListener('click', e => {
@@ -1571,8 +1718,8 @@ function bindGame() {
     const p = e.target.closest('[data-pick]'); if (p && S.cs) {
       registerGeo(p.dataset.pick);
       S.cs.f.parent = p.dataset.pick; S.cs.parentQ = null; closeParentDrop();
-      const ps = $('#parentShow'); if (ps) { ps.value = geoLabel(p.dataset.pick); ps.classList.add('ok'); const m = document.querySelector('#sec-basic [data-msg="parent"]'); if (m) m.textContent = ''; }
-      toast('Parent selected: ' + geoLabel(p.dataset.pick), 2000);
+      const ps = $('#parentShow'); if (ps) { ps.value = geoTplLabel(p.dataset.pick); ps.classList.add('ok'); const m = document.querySelector('#sec-basic [data-msg="parent"]'); if (m) m.textContent = ''; }
+      toast('Parent selected: ' + geoTplLabel(p.dataset.pick), 2000);
     }
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { ['mParent', 'mGeneric', 'mDecision'].forEach(closeModal); $('#rejMenu').classList.add('hidden'); } });
@@ -1588,7 +1735,7 @@ const DAY_LIST = () => Array.from({ length: APP_CONFIG.MAX_DAYS }, (_, i) => i +
 function openAdminLogin() {
   $('#mAdminBox').innerHTML = `<div class="modal-h"><h3>🔐 Admin Portal Access</h3><button class="x" data-close="mAdmin">✕</button></div>
     <div class="modal-b" style="max-width:420px;margin:30px auto;width:100%">
-      <p style="color:#6b7785;font-size:13px">Trainer tools: results, question bank, sessions, waves, trainers and Google Sheet settings.</p>
+      <p style="color:#6b7785;font-size:13px">Trainer tools: results, question bank, sessions, waves, trainers and settings.</p>
       <label class="mlabel">Admin password</label><input type="password" class="mselect" id="admPass" placeholder="Enter password" autocomplete="off">
       <div class="err-msg" id="admErr"></div>
       <button class="btn btn-pri" style="width:100%;margin-top:10px" id="admGo">Unlock</button>
@@ -1680,13 +1827,22 @@ function drawDash() {
   $$('#admTbl th[data-sort]').forEach(th => th.onclick = () => { ADM.sort = { k: th.dataset.sort, dir: ADM.sort.k === th.dataset.sort ? -ADM.sort.dir : -1 }; drawDash(); });
   $$('#admTbl [data-att]').forEach(tr => tr.onclick = () => admAttempt(tr.dataset.att));
 }
+/* v2.6: everything the agent saved on that question (Question_Log "Entered …" columns) */
+function admEntryHtml(q) {
+  const rows = ENTRY_FIELDS.filter(([, , col]) => col.startsWith('ent') && q[col] !== undefined && q[col] !== '' && !(col === 'entAllIncl' && q[col] === 'No'))
+    .map(([, label, col]) => [label, q[col]]);
+  if (q.pinDistM !== undefined && q.pinDistM !== '') rows.push(['Pin distance', q.pinDistM + ' m']);
+  if (q.listing) rows.unshift(['Saved as', q.listing]);
+  if (!rows.length) return '';
+  return `<details class="adm-entry"><summary>📋 Entered fields (${rows.length})</summary><table>${rows.map(([l, v]) => `<tr><td>${esc(l)}</td><td>${esc(v)}</td></tr>`).join('')}</table></details>`;
+}
 function admAttempt(id) {
   const a = ADM.results.find(r => r.attemptId === id); const qs = ADM.questions.filter(q => q.attemptId === id).sort((x, y) => x.qNo - y.qNo);
   const D = DECISIONS, rl = k => (REASONS[k] ? REASONS[k].label : k || '—');
   generic(`Attempt ${esc(id)}`, `<p><b>${esc(a.name)}</b> (ID ${esc(a.trainingId)}) · ${esc(a.country)} · Trainer ${esc(a.trainer)} · Day ${esc(a.day)} · ${esc(a.accuracy)}% · ${esc(a.xp)} XP<br><span style="color:#6b7785;font-size:12px">Badges: ${esc(a.badges || '—')} · ${esc(a.startedAt)} → ${esc(a.finishedAt)}</span></p>
     <table class="fb-tbl"><tr><th>#</th><th>Property</th><th>Agent action</th><th>Expected</th><th>Reason</th><th>Data</th><th>Score</th><th>Time</th><th>Notes / TA link</th></tr>
     ${qs.map(q => `<tr><td>${q.qNo}</td><td>${esc(q.hotel)}<div style="font-size:11px;color:#888">${esc(q.caseId)}</div></td><td>${D[q.decision] ? D[q.decision].short : esc(q.decision)}</td><td>${D[q.expectedDecision] ? D[q.expectedDecision].short : ''} ${truthy(q.decisionOk) ? '<span class="ok-c">✔</span>' : '<span class="bad-c">✖</span>'}</td>
-      <td>${truthy(q.reasonOk) ? '<span class="ok-c">✔</span>' : '<span class="bad-c">✖</span>'} ${esc(rl(q.reason))}</td><td>${esc(q.fieldsPct)}%</td><td><b>${esc(q.score)}</b>${truthy(q.critical) ? ' 🚨' : ''}</td><td>${fmtTime(+q.timeSec || 0)}</td><td style="max-width:240px;word-break:break-word">${esc(q.notes)}${q.match ? `<div style="font-size:11px">🔗 ${esc(q.match)}</div>` : ''}${q.internalComment ? `<div style="font-size:11px">🏷️ Internal: ${esc(q.internalComment)}</div>` : ''}${q.showAll === 'No' ? '<div class="bad-c" style="font-size:11px">👁 Show All Fields not used</div>' : ''}<div style="font-size:10.5px;color:#999">${esc(q.fieldDetail)}</div></td></tr>`).join('') || '<tr><td colspan="9">No question detail available.</td></tr>'}</table>`,
+      <td>${truthy(q.reasonOk) ? '<span class="ok-c">✔</span>' : '<span class="bad-c">✖</span>'} ${esc(rl(q.reason))}</td><td>${esc(q.fieldsPct)}%</td><td><b>${esc(q.score)}</b>${truthy(q.critical) ? ' 🚨' : ''}</td><td>${fmtTime(+q.timeSec || 0)}</td><td style="max-width:240px;word-break:break-word">${esc(q.notes)}${q.match ? `<div style="font-size:11px">🔗 ${esc(q.match)}</div>` : ''}${q.internalComment ? `<div style="font-size:11px">🏷️ Internal: ${esc(q.internalComment)}</div>` : ''}${q.showAll === 'No' ? '<div class="bad-c" style="font-size:11px">👁 Show All Fields not used</div>' : ''}<div style="font-size:10.5px;color:#999">${esc(q.fieldDetail)}</div>${admEntryHtml(q)}</td></tr>`).join('') || '<tr><td colspan="9">No question detail available.</td></tr>'}</table>`,
     `<button class="btn btn-danger btn-sm" id="delAtt">🗑 Delete attempt</button><span style="flex:1"></span><button class="btn btn-ghost" data-close="mGeneric">Close</button>`);
   $('#delAtt').onclick = async () => {
     if (!confirm('Delete this attempt permanently?')) return;
@@ -1733,7 +1889,7 @@ function admQB(b) {
     ADM.qbDay = $('#qbDay').value; ADM.qbSearch = $('#qbQ').value;
     const rows = allQuestions().filter(q => (!ADM.qbDay || String(q.day) === ADM.qbDay) && (!ADM.qbSearch || `${q.id} ${q.feed.name} ${first(q.ans.name) || ''}`.toLowerCase().includes(ADM.qbSearch.toLowerCase())));
     $('#qbTbl').innerHTML = `<thead><tr><th>Case ID</th><th>Day</th><th>Q#</th><th>Feed name</th><th>Correct name</th><th>Parent</th><th>Action</th><th>Source</th><th>Status</th><th></th></tr></thead><tbody>` +
-      rows.map(q => `<tr><td><b>${esc(q.id)}</b></td><td>${q.day}</td><td>${q.q}</td><td>${esc(q.feed.name)}</td><td>${esc(first(q.ans.name) || '—')}</td><td style="font-size:11.5px">${esc(geoLabel(q.ans.parent))}</td>
+      rows.map(q => `<tr><td><b>${esc(q.id)}</b></td><td>${q.day}</td><td>${q.q}</td><td>${esc(q.feed.name)}</td><td>${esc(first(q.ans.name) || '—')}</td><td style="font-size:11.5px">${esc([].concat(q.ans.parent || []).map(geoTplLabel).join(' / '))}</td>
         <td>${DECISIONS[q.ans.decision].icon} ${DECISIONS[q.ans.decision].short}</td><td><span class="tag ${q.custom ? 'custom' : 'builtin'}">${q.custom ? (CASES.some(c => c.id === q.id) ? 'Trainer (replaces built-in)' : 'Trainer') : 'Built-in'}</span></td>
         <td><button class="tag ${q.active ? 'on' : 'off'}" style="border:0" data-qtog="${esc(q.id)}">${q.active ? 'Active' : 'Off'}</button></td>
         <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" data-qedit="${esc(q.id)}">${q.custom ? 'Edit' : 'Edit copy'}</button> ${q.custom ? `<button class="btn btn-danger btn-sm" data-qdel="${esc(q.id)}">✕</button>` : ''}</td></tr>`).join('') + '</tbody>';
@@ -1760,7 +1916,7 @@ function qbForm(q) {
   const T = Object.fromEntries(TPL.map(t => [t[0], t]));
   const input = k => {
     const v = r[k] == null ? '' : r[k];
-    if (k === 'ans.decision') return `<select data-qf="${k}">${['Approve', 'Alias', 'Reject', 'Tier 1', 'Tier 2', 'Defer'].map(o => `<option${o === v ? ' selected' : ''}>${o}</option>`).join('')}</select>`;
+    if (k === 'ans.decision') return `<select data-qf="${k}">${['Approve', 'Alias', 'Reject', 'Escalate', 'Defer'].map(o => `<option${o === v ? ' selected' : ''}>${o}</option>`).join('')}</select>`;
     if (k === 'active' || k === 'ans.allIncl') return `<select data-qf="${k}">${(k === 'active' ? ['Y', 'N'] : ['', 'Y', 'N']).map(o => `<option${o === v ? ' selected' : ''}>${o}</option>`).join('')}</select>`;
     if (k === 'ans.reason') return `<input data-qf="${k}" list="dlReasons" value="${esc(v)}">`;
     if (k === 'ans.type' || k === 'feed.type') return `<input data-qf="${k}" list="dlTypes" value="${esc(v)}">`;
@@ -1771,7 +1927,7 @@ function qbForm(q) {
   generic(q ? (q.custom ? '✏️ Edit question ' + esc(q.id) : '✏️ Edit built-in ' + esc(q.id) + ' (saved as a trainer copy that replaces it)') : '＋ Add question',
     `<datalist id="dlReasons">${Object.values(REASONS).map(x => `<option value="${esc(x.label)}">`).join('')}</datalist>
      <datalist id="dlTypes">${ACCOM_TYPES.concat(['N/A']).map(t => `<option value="${esc(t)}">`).join('')}</datalist>
-     <datalist id="dlGeos">${GEOS.filter(g => !g.noParent).map(g => `<option value="${esc(g.name + ', ' + g.path)}">`).join('')}</datalist>
+     <datalist id="dlGeos">${GEOS.filter(g => g.ta).map(g => `<option value="${esc(geoTplLabel(g.id))}">`).join('')}</datalist>
      <p style="font-size:12px;color:#6b7785;margin-top:0">Blank = not scored · <b>BLANK</b> = agent must leave it empty · several accepted answers: separate with <b> | </b>. Hover a label for help.</p>
      <div class="qb-form">${groups.map(([g, keys]) => `<h5>${g}</h5>` + keys.map(k => `<div class="${['tip', 'votes', 'owners', 'audit', 'feed.desc', 'amen'].includes(k) ? 'span3' : ''}"><label title="${esc(T[k][2])}">${esc(T[k][1])}${/Required/.test(T[k][2]) ? ' *' : ''}</label>${input(k)}</div>`).join('')).join('')}</div>
      <div class="err-msg" id="qfErr" style="margin-top:10px"></div>`,
@@ -1813,18 +1969,19 @@ const TEMPLATE_GUIDE = [
   '• Type BLANK → the agent must leave that field empty (e.g. no postal code exists, no website).',
   '• Several acceptable answers → separate with space-pipe-space, e.g.  Purok 2, South Poblacion | P-2 South Poblacion',
   '• Phone numbers in international format: +91 487 233 9104.  URLs with https://.',
-  '• Correct Parent: write "City, District/Region, State, Country" — e.g. "Munnar, Idukki District, Kerala, India". If the place is not in the simulator yet, it is added to the parent search automatically.',
+  '• Correct Parent: the Tripadvisor geo code and nav string, e.g. "297586 - India, Telangana, Hyderabad District, Hyderabad". Just the code works for geos already in the Lists sheet. New geos are added to the Parent search automatically (agents can search them by name or code).',
   '• Correct Latitude / Longitude: copy from Google Maps (right-click the pin → click the numbers). Geo Tolerance (m) = distance for full marks (default 150; use 300–500 for rural places).',
   '',
   'ACTIONS AND REASONS (see the Lists sheet)',
-  '• Approve (reason optional) · Alias (reason optional) · Reject · Tier 1 · Tier 2 · Defer — Reject/Tier 1/Tier 2/Defer need a reason from the Lists sheet.',
+  '• Approve (reason optional) · Alias (reason optional) · Reject · Escalate · Defer — Reject / Escalate / Defer need a reason from the Lists sheet.',
+  '• Escalate reasons: Unsure what action to take · Weird case or situation · Conflicting information (such as geo, address).',
   '• Reject reasons are the live LMT list: Page down · Vacation Rental · Single unit property · Cannot verify · Property closed · Property removed from TA · Former name · More than 7 night stay required · Not open to public (restricted access) · Open less than 12 consecutive weeks · Not stationary (cruise) · Incorrect property type (not an accommodation).',
   '• Several accepted reasons: separate with " | ".',
   '',
-  'SCORING (per case, 100 points)',
-  '• Correct action 30 · correct reason 10 · data capture 60 (weighted by field).',
-  '• Alias cases score the existing listing\'s values after the agent\'s edits. Reject / Tier 1 / Tier 2 cases score the action only.',
-  '• Approving a case whose answer is Alias / Reject / Tier 1 / Tier 2, or choosing Alias on a new property (merging it into a look-alike) = critical error (0).',
+  'SCORING (10 points per question · 80% needed for the certificate)',
+  '• A question earns 10 points only when the action is correct AND every primary field is correct: Property Name, Street One, Geo and URL. Any one of them wrong = 0.',
+  '• Only the primary fields you fill in the Correct … columns are checked. Other fields (phone, email, postal code, type, parent…) are not scored.',
+  '• Reject / Escalate cases: the action decides. Alias cases: the request must be applied to the right listing, then its Name / Street One / Geo / URL are checked.',
   '',
   'EVIDENCE COLUMNS (shown inside LMT, not on the internet)',
   '• Location Votes: separate votes with " ;; " — e.g.  Closed: gate locked, sign says closed ;; Closed: now a school',
@@ -1838,13 +1995,13 @@ const TEMPLATE_GUIDE = [
 ];
 const TEMPLATE_EXAMPLES = [
   { id: 'EXAMPLE-1', day: 6, q: 1, active: 'Y', 'feed.name': 'SUNRISE HOMESTAY', 'feed.street': 'NEAR BUS STAND', 'feed.postal': '685612', 'feed.parentText': 'IN, Munnar', 'feed.lat': 10.0889, 'feed.lng': 77.0595,
-    'ans.decision': 'Approve', 'ans.name': 'Sunrise Homestay', 'ans.street': 'Near KSRTC Bus Stand | Near Bus Stand', 'ans.postal': '685612', parentLabel: 'Munnar, Idukki District, Kerala, India', 'ans.phone': '+91 94460 00000', 'ans.email': 'BLANK', 'ans.url': 'BLANK', 'ans.type': 'Guest House', 'ans.rooms': 5, 'ans.lat': 10.0889, 'ans.lng': 77.0595, geoTol: 300,
-    tip: 'Feed was ALL CAPS. The phone is not in the feed — the agent finds it online and enters it as +91. No website or email exists, so both stay blank.' },
+    'ans.decision': 'Approve', 'ans.name': 'Sunrise Homestay', 'ans.street': 'Near KSRTC Bus Stand | Near Bus Stand', 'ans.postal': '685612', parentLabel: '303881 - India, Kerala, Idukki District, Munnar', 'ans.phone': '+91 94460 00000', 'ans.email': 'BLANK', 'ans.url': 'BLANK', 'ans.type': 'Guest House', 'ans.rooms': 5, 'ans.lat': 10.0889, 'ans.lng': 77.0595, geoTol: 300,
+    tip: 'Feed was ALL CAPS. The phone is not in the feed, so the agent finds it online. No website or email exists, so both stay blank.' },
   { id: 'EXAMPLE-2', day: 6, q: 2, active: 'Y', 'feed.name': 'Paradise Beach Villas', 'feed.parentText': 'IN, Goa', 'feed.lat': 15.55, 'feed.lng': 73.75, 'feed.desc': 'Pay 100% advance by UPI to confirm. No cash at check-in.',
-    'ans.decision': 'Tier 2', 'ans.reason': 'Suspected fraud / scam indicators', parentLabel: 'Candolim, Bardez, North Goa District, Goa, India', 'ans.lat': 15.518, 'ans.lng': 73.762,
-    votes: 'Scam: paid advance, property does not exist ;; Scam: number switched off after payment', tip: 'Advance payment to a personal account plus scam reports = Tier 2, never a simple reject.' },
+    'ans.decision': 'Escalate', 'ans.reason': 'Weird case or situation', parentLabel: 'India, Goa, North Goa District, Candolim', 'ans.lat': 15.518, 'ans.lng': 73.762,
+    votes: 'Scam: paid advance, property does not exist ;; Scam: number switched off after payment', tip: 'Advance payment to a personal account plus scam reports = Escalate, never a simple reject.' },
   { id: 'EXAMPLE-3', day: 6, q: 3, active: 'Y', 'feed.name': 'Kumarakom Lake Resort & Ayurveda Spa', 'feed.parentText': 'IN, Kumarakom', 'feed.lat': 9.6176, 'feed.lng': 76.4278,
-    'ans.decision': 'Alias', 'ans.match': 'https://www.tripadvisor.com/Hotel_Review-d302893', listingNow: 'type=Hotel', 'ans.name': 'Kumarakom Lake Resort', parentLabel: 'Kumarakom, Kottayam District, Kerala, India',
+    'ans.decision': 'Alias', 'ans.match': 'https://www.tripadvisor.com/Hotel_Review-d302893', listingNow: 'type=Hotel', 'ans.name': 'Kumarakom Lake Resort', parentLabel: '678552',
     'ans.type': 'Resort', 'ans.lat': 9.6176, 'ans.lng': 76.4278, tip: 'The possible match is the existing listing → Add name as alias. The listing says Hotel but it is a resort → edit the type as per sources.' }
 ];
 async function loadSheetJS() {
@@ -1868,8 +2025,8 @@ async function downloadTemplate(fmt, rows, fname) {
     const q = XLSX.utils.aoa_to_sheet(aoa); q['!cols'] = headers.map(h => ({ wch: Math.max(14, Math.min(40, h.length + 4)) }));
     XLSX.utils.book_append_sheet(wb, q, 'Questions');
     const lists = [['Actions', 'Reasons (Action → Reason)', 'Accommodation types', 'Brands', 'Existing parent geos']];
-    const reasons = Object.values(REASONS).map(r => DECISIONS[r.d].short + ' → ' + r.label), geos = GEOS.filter(x => !x.noParent).map(x => x.name + ', ' + x.path);
-    const types = ACCOM_TYPES.concat(['N/A']), acts = ['Approve', 'Alias', 'Reject', 'Tier 1', 'Tier 2', 'Defer'];
+    const reasons = Object.values(REASONS).map(r => DECISIONS[r.d].short + ' → ' + r.label), geos = GEOS.filter(x => x.ta).map(x => geoTplLabel(x.id));
+    const types = ACCOM_TYPES.concat(['N/A']), acts = ['Approve', 'Alias', 'Reject', 'Escalate', 'Defer'];
     for (let i = 0; i < Math.max(reasons.length, geos.length, types.length); i++) lists.push([acts[i] || '', reasons[i] || '', types[i] || '', BRANDS[i] || '', geos[i] || '']);
     const l = XLSX.utils.aoa_to_sheet(lists); l['!cols'] = [{ wch: 12 }, { wch: 60 }, { wch: 24 }, { wch: 26 }, { wch: 70 }];
     XLSX.utils.book_append_sheet(wb, l, 'Lists');
@@ -1985,7 +2142,7 @@ async function cfgDelete(kind, key) {
 }
 function admSess(b) {
   const dl = `<datalist id="dlTrainers">${CFG.trainers.map(t => `<option value="${esc(t.name)}">`).join('')}</datalist>`;
-  const days = availableDays(), dayOpts = days.map(d => `<option value="${d}">Day ${d} · ${esc(dayMeta(d).title)}</option>`).join('');
+  const days = availableDays(), dayOpts = days.map(d => `<option value="${d}">Day ${d} - ${esc(dayMeta(d).title)}</option>`).join('');
   b.innerHTML = dl + `<div class="cfg-grid">
     <div class="cfg-card"><h4>🗓️ Trainer sessions</h4><p style="font-size:12px;color:#6b7785;margin-top:0">A session locks agents to one day — they pick it on the login page instead of a day. Type the trainer's name; new names are saved to the trainer list automatically.</p>
       <div class="cfg-form"><input id="sName" placeholder="Session name (e.g. Batch 12 – Morning)" style="flex:1;min-width:180px"><input id="sTrainer" list="dlTrainers" placeholder="Trainer name" style="width:150px">
@@ -2032,22 +2189,12 @@ function admPeople(b) {
 function admSettings(b) {
   const pend = LS.get('lmt_pending', []).length;
   b.innerHTML = `<div class="cfg-grid">
-    <div class="cfg-card"><h4>🔗 Google Sheet connection</h4>
-      <p style="font-size:12.5px;color:#6b7785;margin-top:0">Paste the Apps Script <b>/exec</b> URL from your Google Sheet (see the setup guide). Saved in this browser — or put it in <code>APP_CONFIG.WEB_APP_URL</code> in script.js so every agent PC uses it.</p>
-      <input class="mselect" id="setUrl" value="${esc(API.url())}" placeholder="https://script.google.com/macros/s/…/exec">
-      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"><button class="btn btn-pri btn-sm" id="setSave">Save</button><button class="btn btn-ghost btn-sm" id="setTest">Test connection</button><button class="btn btn-ghost btn-sm" id="setClear">Use offline mode</button></div>
-      <div id="setMsg" style="font-size:12.5px;margin-top:8px"></div></div>
-    <div class="cfg-card"><h4>⏳ Sync</h4><p style="font-size:13px">${pend} attempt(s) waiting to upload from this browser.</p><button class="btn btn-ghost btn-sm" id="setSync" ${pend ? '' : 'disabled'}>Sync now</button>
+    <div class="cfg-card"><h4>⏳ Sync</h4><p style="font-size:13px">Google Sheet: ${API.configured() ? (ADM.online ? '<b style="color:var(--ok)">✅ connected</b>' : '<b style="color:var(--bad)">⚠ not reachable right now</b>') : '<b>offline mode</b> (no Sheet set in script.js)'}</p><p style="font-size:13px">${pend} attempt(s) waiting to upload from this browser.</p><button class="btn btn-ghost btn-sm" id="setSync" ${pend ? '' : 'disabled'}>Sync now</button>
       ${!ADM.online && CFG.questions.length && API.configured() ? `<h4 style="margin-top:18px">📤 Local questions</h4><p style="font-size:12.5px">${CFG.questions.length} question(s) were added offline in this browser. Log in again while connected and re-upload them via Export → Upload.</p>` : ''}
       <h4 style="margin-top:18px">🧹 Local data</h4><p style="font-size:12.5px;color:#6b7785">Removes attempts, XP profiles, offline questions and settings stored in <b>this browser only</b>. Google Sheet data is not touched.</p><button class="btn btn-danger btn-sm" id="setWipe">Clear this browser's data</button></div>
     <div class="cfg-card"><h4>🔑 Admin password</h4>${ADM.online ? `<div class="cfg-form"><input type="password" id="np1" placeholder="New password (min 8)"><input type="password" id="np2" placeholder="Repeat"><button class="btn btn-pri btn-sm" id="npSave">Change</button></div><p style="font-size:12px;color:#6b7785">Stored in the Apps Script project's Script Properties.</p>`
       : `<p style="font-size:12.5px;color:#6b7785">The offline password is the SHA-256 value in <code>APP_CONFIG.OFFLINE_ADMIN_SHA256</code> in script.js (see the setup guide). Once a Sheet is connected, the Sheet password is used instead.</p>`}</div>
     <div class="cfg-card"><h4>ℹ️ About</h4><p style="font-size:12.5px;line-height:1.6">LMT Places Simulator v${APP_CONFIG.VERSION} · ${allQuestions().length} questions (${CASES.length} built-in) · pass mark ${APP_CONFIG.PASS_MARK}%.</p></div></div>`;
-  const msg = (t, ok) => { $('#setMsg').innerHTML = `<span style="color:${ok ? 'var(--ok)' : 'var(--bad)'}">${t}</span>`; };
-  $('#setSave').onclick = () => { const u = $('#setUrl').value.trim(); if (u && !/^https:\/\/script\.google(usercontent)?\.com\//.test(u)) return msg('That doesn’t look like an Apps Script URL', false); LS.set('lmt_api_url', u); msg('Saved. Reloading…', true); loadConfig(); };
-  $('#setTest').onclick = async () => { const u = $('#setUrl').value.trim(); if (!u) return msg('Enter a URL first', false); const old = LS.get('lmt_api_url', ''); LS.set('lmt_api_url', u); msg('Testing…', true);
-    try { const r = await API.call({ action: 'ping' }); msg('✅ Connected — sheet “' + esc(r.sheet || '') + '”, server time ' + esc(r.time || ''), true); } catch (e) { LS.set('lmt_api_url', old); msg('❌ ' + esc(e.message || e) + ' — check the deployment has “Anyone” access and the URL ends in /exec', false); } };
-  $('#setClear').onclick = () => { LS.set('lmt_api_url', ''); msg('Offline mode on (unless WEB_APP_URL is set in script.js).', true); loadConfig(); };
   $('#setSync').onclick = async () => { await flushPending(); renderAdmin(); toast('Sync finished'); };
   $('#setWipe').onclick = () => { if (!confirm('Clear all simulator data stored in this browser?')) return; ['lmt_attempts', 'lmt_pending', 'lmt_cfg_local', 'lmt_cfg_cache', 'lmt_last_login', 'lmt_questions_local', 'lmt_builtin_off_local'].forEach(LS.del); try { Object.keys(localStorage).filter(k => k.startsWith('lmt_profile_')).forEach(k => localStorage.removeItem(k)); } catch (e) { } toast('Browser data cleared'); loadConfig().then(() => fetchAdminData()).then(renderAdmin); };
   if ($('#npSave')) $('#npSave').onclick = async () => { const a = $('#np1').value, b2 = $('#np2').value; if (a.length < 8) return toast('Min 8 characters'); if (a !== b2) return toast('Passwords do not match'); try { await API.call({ action: 'changePassword', token: ADM.token, newPassword: a }); toast('Password changed'); $('#np1').value = $('#np2').value = ''; } catch (e) { toast('⚠ ' + e.message); } };

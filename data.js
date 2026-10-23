@@ -14,7 +14,7 @@
    • 3 Approve cases also carry a `listing` that is NOT the same property
      (a look-alike) — the agent must click "Not match, create new".
    • 5 "Not an accommodation" cases are real non-lodging places.
-   • 10 cases (Unverifiable / Tier 2) use INVENTED names on purpose —
+   • 11 cases (Cannot verify / Escalate) use INVENTED names on purpose —
      nothing exists online, and all evidence is inside LMT. No real
      business is named in any fraud or safety scenario.
    Edit or replace any case from Admin → Questions (Export → edit → Upload).
@@ -27,7 +27,12 @@
 
 const BRANDS = ['CGH Earth', 'Taj Hotels', 'ITC Hotels', 'The Leela', 'Marriott', 'Hilton', 'Accor', 'OYO', 'Treebo', 'FabHotels', 'Zostel', 'Sterling Holidays'];
 
-const ACCOM_TYPES = ['Hotel', 'Resort', 'Motel', 'B&B / Inn', 'Guest House', 'Hostel', 'Specialty Lodging', 'Apartment Hotel', 'Campground / Glamping'];
+const ACCOM_TYPES = ['Hotel', 'Motel', 'Resort', 'Resort (All-Inclusive)', 'Spa', 'Boutique Hotel', 'Onsen Hotel', 'Onsen Ryokan', 'Ryokan', 'B&B', 'Inn',
+  'Small Hotel', 'Guest House', 'Pension', 'Japanese Pension', 'Minshuku', 'Condominium', 'Villa', 'Hostel', 'Ranch', 'Farmhouse', 'Cottage', 'Lodge',
+  'Castle', 'Cabin', 'Campground', 'Specialty Hotel', 'Specialty Resort', 'Specialty B&B', 'Specialty Inn', 'Farm Hotel', 'Tourist Base',
+  'Russian Health Resort', 'Russian Pension', 'Capsule Hotel', 'Limited Service Property', 'Shukubo (Temple Lodging)', 'Kokumin Shukusha (Government Resort)'];
+/* Old type names (v2.0–v2.4 templates) still upload */
+const LEGACY_TYPES = { 'B&B / Inn': 'B&B', 'Specialty Lodging': 'Specialty Hotel', 'Apartment Hotel': 'Condominium', 'Campground / Glamping': 'Campground' };
 
 /* What the provider page lists under "Amenities & facilities". It never states
    the accommodation type — agents work it out from these clues.
@@ -38,11 +43,12 @@ const AMENITY_PROFILES = {
   'Hotel': ['24-hour front desk', 'On-site restaurant', 'Room service', 'Daily housekeeping', 'Lift'],
   'Resort': ['Large landscaped grounds', 'Swimming pool', 'Spa / Ayurveda centre', 'Several restaurants and bars', 'Organised leisure activities'],
   'Motel': ['Drive-up rooms facing the car park', 'Free parking at the door', 'Self check-in desk'],
-  'B&B / Inn': ['Owner-run', 'Breakfast included in the rate', 'Only a handful of rooms'],
+  'B&B': ['Owner-run', 'Breakfast included in the rate', 'Only a handful of rooms'],
   'Hostel': ['Dormitory beds', 'Shared bathrooms', 'Common lounge and kitchen', 'Lockers'],
-  'Specialty Lodging': ['Unusual stay (treehouse / houseboat / cave / eco-lodge)', 'Very few units', 'Meals served on site', 'Nature activities with a guide'],
-  'Apartment Hotel': ['Serviced apartment with kitchen', 'Separate living area', 'Housekeeping'],
-  'Campground / Glamping': ['Tents or camp cottages', 'Shared wash blocks', 'Campfire area'],
+  'Specialty Hotel': ['Unusual stay (treehouse / houseboat / cave / eco-lodge)', 'Very few units', 'Meals served on site', 'Nature activities with a guide'],
+  'Farmhouse': ['Working farm or plantation', 'Rooms in the farmhouse', 'Farm-fresh meals', 'Farm walks with the owners'],
+  'Condominium': ['Serviced apartment with kitchen', 'Separate living area', 'Housekeeping'],
+  'Campground': ['Tents or camp cottages', 'Shared wash blocks', 'Campfire area'],
   none: ['No overnight rooms listed', 'Entry by ticket / opening hours apply'],
   claimed: ['Free Wi-Fi', 'Swimming pool', 'Restaurant', 'Airport transfer']
 };
@@ -54,8 +60,7 @@ const DECISIONS = {
   approve: { label: 'Approve – Create New', short: 'Approve', color: '#1f7a3a', icon: '✔' },
   alias:   { label: 'Add Name as Alias – Apply to Existing Listing', short: 'Alias', color: '#0b5d3b', icon: '＋' },
   reject:  { label: 'Reject / Close Request', short: 'Reject', color: '#d6322b', icon: '✖' },
-  t1:      { label: 'Escalate to Tier 1', short: 'Tier 1', color: '#7b4fd6', icon: '⬆' },
-  t2:      { label: 'Escalate to Tier 2', short: 'Tier 2', color: '#5a2ca0', icon: '⏫' },
+  t1:      { label: 'Escalate', short: 'Escalate', color: '#7b4fd6', icon: '⬆' },
   defer:   { label: 'Defer – Keep In Progress', short: 'Defer', color: '#2a9fd6', icon: '⏱' }
 };
 
@@ -75,404 +80,439 @@ const REASONS = {
   seasonal:            { d: 'reject',  label: 'Open less than 12 consecutive weeks' },
   not_stationary:      { d: 'reject',  label: 'Not stationary (cruise)' },
   not_accommodation:   { d: 'reject',  label: 'Incorrect property type (not an accommodation)' },
-  conflict:            { d: 't1',      label: 'Conflicting data between sources' },
-  location_unconfirmed:{ d: 't1',      label: 'Exact location cannot be confirmed' },
-  fraud:               { d: 't2',      label: 'Suspected fraud / scam indicators' },
-  brand_dispute:       { d: 't2',      label: 'Brand or ownership dispute' },
-  safety_legal:        { d: 't2',      label: 'Safety or legal concern' },
+  unsure:              { d: 't1',      label: 'Unsure what action to take' },
+  weird_case:          { d: 't1',      label: 'Weird case or situation' },
+  conflict:            { d: 't1',      label: 'Conflicting information (such as geo, address)' },
   preopening:          { d: 'defer',   label: 'Not open yet (pre-opening / under construction)' },
   awaiting_info:       { d: 'defer',   label: 'Awaiting more information from provider' }
 };
-/* Old reason wording (v2.0–v2.2 templates and exports) still uploads correctly */
+/* Old reason wording / keys (v2.0–v2.4) still upload and still score correctly */
 const LEGACY_REASONS = {
   'unverifiable – no evidence the property exists': 'unverifiable', 'unverifiable': 'unverifiable', 'permanently closed': 'closed',
-  'not an accommodation': 'not_accommodation', 'existing tripadvisor listing – add feed name as alias': 'duplicate'
+  'not an accommodation': 'not_accommodation', 'existing tripadvisor listing – add feed name as alias': 'duplicate',
+  'conflicting data between sources': 'conflict', 'exact location cannot be confirmed': 'conflict', 'location_unconfirmed': 'conflict',
+  'suspected fraud / scam indicators': 'weird_case', 'brand or ownership dispute': 'weird_case', 'safety or legal concern': 'weird_case',
+  'fraud': 'weird_case', 'brand_dispute': 'weird_case', 'safety_legal': 'weird_case'
 };
 
-/* ---------- Parent geos (real places; IDs are simulator IDs) ---------- */
-const GEOS = [
-  { id: 'g2001', name: 'Munnar', path: 'Idukki District, Kerala, India', cc: 'IN' },
-  { id: 'g2002', name: 'Devikulam', path: 'Idukki District, Kerala, India', cc: 'IN' },
-  { id: 'g2003', name: 'Adimali', path: 'Idukki District, Kerala, India', cc: 'IN' },
-  { id: 'g2004', name: 'Kumily (Thekkady)', path: 'Idukki District, Kerala, India', cc: 'IN' },
-  { id: 'g2005', name: 'Vagamon', path: 'Idukki District, Kerala, India', cc: 'IN' },
-  { id: 'g2006', name: 'Kochi (Cochin)', path: 'Ernakulam District, Kerala, India', cc: 'IN' },
-  { id: 'g2007', name: 'Kochi', path: 'Kochi Prefecture, Shikoku, Japan', cc: 'JP' },
-  { id: 'g2008', name: 'Ambalavayal', path: 'Wayanad District, Kerala, India', cc: 'IN' },
-  { id: 'g2009', name: 'Kalpetta', path: 'Wayanad District, Kerala, India', cc: 'IN' },
-  { id: 'g2010', name: 'Vythiri', path: 'Wayanad District, Kerala, India', cc: 'IN' },
-  { id: 'g2011', name: 'Alappuzha (Alleppey)', path: 'Alappuzha District, Kerala, India', cc: 'IN' },
-  { id: 'g2012', name: 'Mararikulam', path: 'Alappuzha District, Kerala, India', cc: 'IN' },
-  { id: 'g2013', name: 'Kumarakom', path: 'Kottayam District, Kerala, India', cc: 'IN' },
-  { id: 'g2014', name: 'Varkala', path: 'Thiruvananthapuram District, Kerala, India', cc: 'IN' },
-  { id: 'g2015', name: 'Kovalam', path: 'Thiruvananthapuram District, Kerala, India', cc: 'IN' },
-  { id: 'g2016', name: 'Kovalam (Covelong)', path: 'Chengalpattu District, Tamil Nadu, India', cc: 'IN' },
-  { id: 'g2017', name: 'Thiruvananthapuram (Trivandrum)', path: 'Thiruvananthapuram District, Kerala, India', cc: 'IN' },
-  { id: 'g2018', name: 'Ponmudi', path: 'Thiruvananthapuram District, Kerala, India', cc: 'IN' },
-  { id: 'g2019', name: 'Kannur', path: 'Kannur District, Kerala, India', cc: 'IN' },
-  { id: 'g2020', name: 'Taliparamba', path: 'Kannur District, Kerala, India', cc: 'IN' },
-  { id: 'g2021', name: 'Kozhikode (Calicut)', path: 'Kozhikode District, Kerala, India', cc: 'IN' },
-  { id: 'g2022', name: 'Payyoli', path: 'Kozhikode District, Kerala, India', cc: 'IN' },
-  { id: 'g2023', name: 'Munroe Island', path: 'Kollam District, Kerala, India', cc: 'IN' },
-  { id: 'g2024', name: 'Kollam', path: 'Kollam District, Kerala, India', cc: 'IN' },
-  { id: 'g2025', name: 'Thrissur', path: 'Thrissur District, Kerala, India', cc: 'IN' },
-  { id: 'g2026', name: 'Tiruchirappalli (Trichy)', path: 'Tiruchirappalli District, Tamil Nadu, India', cc: 'IN' },
-  { id: 'g2027', name: 'Chalakudy', path: 'Thrissur District, Kerala, India', cc: 'IN' },
-  { id: 'g2028', name: 'Athirappilly', path: 'Thrissur District, Kerala, India', cc: 'IN' },
-  { id: 'g2029', name: 'Muthalamada', path: 'Palakkad District, Kerala, India', cc: 'IN' },
-  { id: 'g2030', name: 'Palakkad', path: 'Palakkad District, Kerala, India', cc: 'IN' },
-  { id: 'g2031', name: 'Bekal', path: 'Kasaragod District, Kerala, India', cc: 'IN' },
-  { id: 'g2032', name: 'Cherai', path: 'Vypin Island, Ernakulam District, Kerala, India', cc: 'IN' },
-  { id: 'g2033', name: 'Mumbai (Bombay)', path: 'Maharashtra, India', cc: 'IN' },
-  { id: 'g2034', name: 'Singapore', path: 'Singapore', cc: 'SG' },
-  { id: 'g2037', name: 'Kodaikanal', path: 'Dindigul District, Tamil Nadu, India', cc: 'IN' },
-  { id: 'g2035', name: 'Chithirapuram', path: 'Munnar, Idukki District, Kerala, India (neighbourhood – not a parent geo)', cc: 'IN', noParent: true },
-  { id: 'g2036', name: 'Fort Kochi', path: 'Kochi, Ernakulam District, Kerala, India (neighbourhood – not a parent geo)', cc: 'IN', noParent: true }
+/* ---------- Parent geos — REAL Tripadvisor geo codes and nav strings ----------
+   [Tripadvisor geo code, "Country, State, District, …, City"] — checked on tripadvisor.com, Oct 2026.
+   Agents can search the Parent box by name OR by geo code (e.g. 297586 → Hyderabad).
+   The internal id is "g" + the geo code, exactly like Tripadvisor URLs (…-g297586-…). */
+const TA_GEOS = [
+  [297586, 'India, Telangana, Hyderabad District, Hyderabad'],
+  [7058854, 'India, Telangana'],
+  [297631, 'India, Kerala'],
+  [10617486, 'India, Kerala, Idukki District'],
+  [303881, 'India, Kerala, Idukki District, Munnar'],
+  [5258996, 'India, Kerala, Idukki District, Munnar, Chithirapuram'],
+  [2287343, 'India, Kerala, Idukki District, Devikulam'],
+  [21406257, 'India, Kerala, Idukki District, Adimali'],
+  [3404953, 'India, Kerala, Idukki District, Adimaly'],
+  [297632, 'India, Kerala, Idukki District, Idukki'],
+  [297636, 'India, Kerala, Idukki District, Thekkady'],
+  [7998458, 'India, Kerala, Idukki District, Thekkady, Kumily'],
+  [2282921, 'India, Kerala, Idukki District, Vagamon'],
+  [297633, 'India, Kerala, Ernakulam District, Kochi (Cochin)'],
+  [15180821, 'India, Kerala, Ernakulam District, Kochi (Cochin), Fort Kochi'],
+  [2647335, 'India, Kerala, Ernakulam District, Kochi (Cochin), Vypin Island, Cherai Beach'],
+  [3841232, 'India, Kerala, Wayanad District'],
+  [3721797, 'India, Kerala, Wayanad District, Sulthan Bathery, Ambalavayal'],
+  [1232778, 'India, Kerala, Wayanad District, Kalpetta'],
+  [2295130, 'India, Kerala, Wayanad District, Vythiri'],
+  [608471, 'India, Kerala, Alappuzha District, Alappuzha'],
+  [3171875, 'India, Kerala, Alappuzha District, Mararikulam'],
+  [12375132, 'India, Kerala, Kottayam District'],
+  [678552, 'India, Kerala, Kottayam District, Kumarakom'],
+  [17794977, 'India, Kerala, Thiruvananthapuram District, Varkala'],
+  [297639, 'India, Kerala, Thiruvananthapuram District, Varkala, Varkala Town'],
+  [311295, 'India, Kerala, Thiruvananthapuram District, Kovalam'],
+  [297637, 'India, Kerala, Thiruvananthapuram District, Thiruvananthapuram (Trivandrum)'],
+  [1307937, 'India, Kerala, Thiruvananthapuram District, Ponmudi'],
+  [12300300, 'India, Kerala, Kannur District'],
+  [777115, 'India, Kerala, Kannur District, Kannur'],
+  [9734133, 'India, Kerala, Kannur District, Taliparamba'],
+  [12375137, 'India, Kerala, Kozhikode District'],
+  [297635, 'India, Kerala, Kozhikode District, Kozhikode'],
+  [12445206, 'India, Kerala, Kozhikode District, Koyilandy'],
+  [8405333, 'India, Kerala, Kozhikode District, Vadakara'],
+  [12375110, 'India, Kerala, Kollam District'],
+  [784581, 'India, Kerala, Kollam District, Kollam'],
+  [12436767, 'India, Kerala, Kollam District, Munroe Island'],
+  [735202, 'India, Kerala, Thrissur District, Thrissur'],
+  [1888092, 'India, Kerala, Thrissur District, Chalakudy'],
+  [2289004, 'India, Kerala, Thrissur District, Athirappilly'],
+  [12375522, 'India, Kerala, Palakkad District'],
+  [1096235, 'India, Kerala, Palakkad District, Palakkad'],
+  [14996779, 'India, Kerala, Palakkad District, Kollengode'],
+  [28467268, 'India, Kerala, Palakkad District, Muthalamada South'],
+  [1222295, 'India, Kerala, Kasaragod District, Bekal'],
+  [303891, 'India, Tamil Nadu, Kanchipuram District, Kovalam'],
+  [2287353, 'India, Tamil Nadu, Kanchipuram District, Covelong'],
+  [317098, 'India, Tamil Nadu, Tiruchirappalli District, Tiruchirappalli'],
+  [303890, 'India, Tamil Nadu, Dindigul District, Kodaikanal'],
+  [304554, 'India, Maharashtra, Mumbai'],
+  [294265, 'Singapore'],
+  [298233, 'Japan, Shikoku, Kochi Prefecture'],
+  [298234, 'Japan, Shikoku, Kochi Prefecture, Kochi']
 ];
+const COUNTRY_CC = { india: 'IN', singapore: 'SG', japan: 'JP' };
+/* nav string ("India, Kerala, Idukki District, Munnar") → geo object */
+function navGeo(ta, nav, id) {
+  const parts = String(nav).split(',').map(s => s.trim()).filter(Boolean);
+  return { id: id || 'g' + ta, ta: ta ? Number(ta) : null, nav: parts.join(', '), name: parts[parts.length - 1], path: parts.slice(0, -1).reverse().join(', '), cc: COUNTRY_CC[String(parts[0]).toLowerCase()] || '' };
+}
+const GEOS = TA_GEOS.map(([ta, nav]) => navGeo(ta, nav));
+/* Simulator geo ids used before v2.5 → real Tripadvisor geo ids (keeps older trainer questions working) */
+const LEGACY_GEOS = { g2001: 'g303881', g2002: 'g2287343', g2003: 'g21406257', g2004: 'g7998458', g2005: 'g2282921', g2006: 'g297633', g2007: 'g298234',
+  g2008: 'g3721797', g2009: 'g1232778', g2010: 'g2295130', g2011: 'g608471', g2012: 'g3171875', g2013: 'g678552', g2014: 'g17794977', g2015: 'g311295',
+  g2016: 'g303891', g2017: 'g297637', g2018: 'g1307937', g2019: 'g777115', g2020: 'g9734133', g2021: 'g297635', g2022: 'g12445206', g2023: 'g12436767',
+  g2024: 'g784581', g2025: 'g735202', g2026: 'g317098', g2027: 'g1888092', g2028: 'g2289004', g2029: 'g28467268', g2030: 'g1096235', g2031: 'g1222295',
+  g2032: 'g2647335', g2033: 'g304554', g2034: 'g294265', g2035: 'g5258996', g2036: 'g15180821', g2037: 'g303890' };
 
 const CASES = [
 
 /* =========================== DAY 1 — FUNDAMENTALS =========================== */
 { id: 'D1-01', source: 'https://www.keralatourism.org/homestays/snow-moon-homestay/4038', day: 1, q: 1, req: 121553365,
   feed: { name: 'SNOW MOON HOMESTAY', street: 'Pattamthanath House', postal: '685565', parentText: 'IN, Munnar', lat: 10.0402, lng: 77.0571 },
-  ans: { decision: 'approve', reason: 'new_verified', name: 'Snow Moon Homestay', street: ['Pattamthanath House, Chithirapuram', 'Pattamthanath House'], postal: '685565', parent: 'g2001',
+  ans: { decision: 'approve', reason: 'new_verified', name: 'Snow Moon Homestay', street: ['Pattamthanath House, Chithirapuram', 'Pattamthanath House'], postal: '685565', parent: ['g5258996', 'g303881'],
     phone: '+91 88480 19141', email: ['snowmoonhomestay@gmail.com', 'info@snowmoonhomestay.com'], url: ['http://www.snowmoonhomestay.com', ''], type: 'Guest House', lat: 10.028392, lng: 77.045577 },
   geoTol: 300,
-  tip: 'Feed was in ALL CAPS and the pin was 1.7 km off. The feed never sends phone, email, website or type — the Kerala Tourism listing and the official site give them (phone in +91 format). It is a homestay, so Guest House, not Hotel. Chithirapuram is a neighbourhood — the parent is Munnar.' },
+  tip: 'Feed was in ALL CAPS and the pin was 1.7 km off. The feed never sends phone, email, website or type — the Kerala Tourism listing and the official site give them. It is a homestay, so Guest House, not Hotel. Chithirapuram has its own geo under Munnar, so it is the most specific parent.' },
 
 { id: 'D1-02', source: 'https://www.keralatourism.org/homestays/green-horizon-homestay/8482', day: 1, q: 2, req: 121553402,
   feed: { name: 'Green Horizon Home Stay', street: 'Fort Nagar', postal: '682001', parentText: 'Kochi', lat: 33.5597, lng: 133.5311 },
-  ans: { decision: 'approve', reason: 'new_verified', name: 'Green Horizon Homestay', street: ['Fort Nagar, Fort Kochi', 'Fort Nagar'], postal: '682001', parent: 'g2006',
+  ans: { decision: 'approve', reason: 'new_verified', name: 'Green Horizon Homestay', street: ['Fort Nagar, Fort Kochi', 'Fort Nagar'], postal: '682001', parent: ['g15180821', 'g297633'],
     phone: '+91 88910 77232', email: 'greenhorizonstay@gmail.com', url: ['http://www.greenhorizonstay.com', ''], type: 'Guest House', lat: 9.966791, lng: 76.244514 },
   geoTol: 250,
-  listing: { id: 'd9182734', name: 'Green Horizon Resort', street: 'Observatory Road', postal: '624101', parent: 'g2037', type: 'Resort', lat: 10.2381, lng: 77.4892 },
-  tip: 'LMT offered "Green Horizon Resort" as a possible match — but it is in Kodaikanal, Tamil Nadu, a different property. Click Not match, create new. The feed pin landed in Kochi, JAPAN: always check the country when you pick a parent. Fort Kochi is a neighbourhood of Kochi (Cochin), Kerala.' },
+  listing: { id: 'd9182734', name: 'Green Horizon Resort', street: 'Observatory Road', postal: '624101', parent: 'g303890', type: 'Resort', lat: 10.2381, lng: 77.4892 },
+  tip: 'LMT offered "Green Horizon Resort" as a possible match — but it is in Kodaikanal, Tamil Nadu, a different property. Click Not match, create new. The feed pin landed in Kochi, JAPAN: always check the country when you pick a parent. Fort Kochi has its own geo inside Kochi (Cochin), Kerala.' },
 
 { id: 'D1-03', source: 'https://www.keralatourism.org/homestays/kerala-spices-homestay/8592', day: 1, q: 3, req: 121553418,
   feed: { name: 'Kerala Spices Homestay Thekkady', street: 'Kollaparambil House', postal: '685509', parentText: 'IN, Thekkady', lat: 9.6040, lng: 77.1680 },
-  ans: { decision: 'approve', reason: 'new_verified', name: 'Kerala Spices Homestay', street: ['Kollaparambil House, Valiyakandam', 'Kollaparambil House'], street2: ['Valiyakandam', ''], postal: '685509', parent: 'g2004',
+  ans: { decision: 'approve', reason: 'new_verified', name: 'Kerala Spices Homestay', street: ['Kollaparambil House, Valiyakandam', 'Kollaparambil House'], street2: ['Valiyakandam', ''], postal: '685509', parent: ['g7998458', 'g297636'],
     phone: '+91 99473 30134', email: 'keralaspiceshomestay@gmail.com', url: ['http://www.keralaspiceshomestay.com', ''], type: 'Guest House', lat: 9.610758, lng: 77.161763 },
   geoTol: 300,
-  tip: 'Don\'t keep a city the feed added to the name ("…Thekkady") unless the property uses it. Thekkady sits inside Kumily — pick "Kumily (Thekkady)".' },
+  tip: 'Don\'t keep a city the feed added to the name ("…Thekkady") unless the property uses it. On Tripadvisor Kumily sits inside Thekkady — pick Kumily (Thekkady is also accepted).' },
 
 { id: 'D1-04', source: 'https://www.keralatourism.org/homestays/bougainvillea-homestay/7044', day: 1, q: 4, req: 121553431,
   feed: { name: 'BOUGAINVILLEA HOMESTAY', street: 'K N VIHAR, NORTH CLIFF HELIPAD ROAD', postal: '695141', parentText: 'IN, Varkala', lat: 8.7379, lng: 76.7163 },
-  ans: { decision: 'approve', reason: 'new_verified', name: 'Bougainvillea Homestay', street: ['K N Vihar, North Cliff Helipad Road', 'KN Vihar, North Cliff Helipad Road'], postal: '695141', parent: 'g2014',
+  ans: { decision: 'approve', reason: 'new_verified', name: 'Bougainvillea Homestay', street: ['K N Vihar, North Cliff Helipad Road', 'KN Vihar, North Cliff Helipad Road'], postal: '695141', parent: ['g17794977', 'g297639'],
     phone: ['+91 85907 94534', '+91 90740 58901'], email: 'bougainvilleahomestays@gmail.com', url: ['http://bougainvilleahomestays.in', ''], type: 'Guest House', lat: 8.737694, lng: 76.706133 },
   geoTol: 250,
-  tip: 'ALL CAPS name and street must be converted to proper case. Two phone numbers exist — either one in +91 format is fine.' },
+  tip: 'ALL CAPS name and street must be converted to proper case. Two phone numbers exist, and either one is fine.' },
 
 { id: 'D1-05', source: 'https://www.keralatourism.org/homestays/ananda-homestay/6508', day: 1, q: 5, req: 121553447,
   feed: { name: 'Ananda Home Stay Wayanad', street: 'Nellarachal', postal: '673593', parentText: 'IN, Kalpetta', rooms: '6', lat: 11.6103, lng: 76.0830 },
-  ans: { decision: 'approve', reason: 'new_verified', name: 'Ananda Homestay', street: ['Nellarachal, Ambalavayal', 'Nellarachal'], postal: '673593', parent: 'g2008',
+  ans: { decision: 'approve', reason: 'new_verified', name: 'Ananda Homestay', street: ['Nellarachal, Ambalavayal', 'Nellarachal'], postal: '673593', parent: 'g3721797',
     phone: ['+91 97444 45288', '+91 98959 90948'], email: ['anandawayanad@gmail.com', 'drlijikrishnan@gmail.com'], url: 'https://www.anandawayanad.com', type: 'Guest House', rooms: 4, lat: 11.5952849, lng: 76.1847973 },
   geoTol: 300,
   tip: 'The feed said Kalpetta and 6 rooms. The homestay\'s own description says four guest rooms, and it is in Ambalavayal, about 11 km away. The property\'s own words beat the feed.' },
 
 { id: 'D1-06', source: 'https://www.keralatourism.org/homestays/royal-mist/3831', day: 1, q: 6, req: 121553460,
   feed: { name: 'Royal Mist Homestay', postal: '685565', parentText: 'IN, Munnar', lat: 10.0889, lng: 77.0595 },
-  ans: { decision: 'approve', reason: 'new_verified', name: ['Royal Mist', 'Royal Mist Homestay'], street: ['Chithirapuram', 'Chithirapuram, Munnar'], postal: '685565', parent: 'g2001',
+  ans: { decision: 'approve', reason: 'new_verified', name: ['Royal Mist', 'Royal Mist Homestay'], street: ['Chithirapuram', 'Chithirapuram, Munnar'], postal: '685565', parent: ['g5258996', 'g303881'],
     phone: ['+91 94954 44123', '+91 94470 31814'], email: 'royalmistmunnar@gmail.com', url: ['http://www.royalmist.in', ''], type: 'Guest House', lat: 10.030762, lng: 77.037892 },
   geoTol: 300,
   tip: 'The feed pin sat in Munnar town centre, about 6.5 km from the property in Chithirapuram. Re-pin from Google Maps or the Kerala Tourism map.' },
 
 { id: 'D1-07', source: 'https://www.keralatourism.org/homestays/thayil-kadaloram-homestay/6232', day: 1, q: 7, req: 121553476,
   feed: { name: 'Thayil Kadaloram Homestay', street: 'Beach Road', postal: '695527', parentText: 'Kovalam', lat: 12.7900, lng: 80.2540 },
-  ans: { decision: 'approve', reason: 'new_verified', name: 'Thayil Kadaloram Homestay', street: ['Beach Road', 'Beach Road, Kovalam'], postal: '695527', parent: 'g2015',
+  ans: { decision: 'approve', reason: 'new_verified', name: 'Thayil Kadaloram Homestay', street: ['Beach Road', 'Beach Road, Kovalam'], postal: '695527', parent: 'g311295',
     phone: ['+91 471 248 1934', '+91 73066 63669'], email: 'thayilkadaloram@gmail.com', url: '', type: 'Guest House', lat: 8.390082, lng: 76.976099 },
   geoTol: 250,
-  tip: 'There are two Kovalams: the beach town in Kerala and Kovalam (Covelong) near Chennai — the feed pin was in Tamil Nadu. A local landline written 0471… goes into LMT as +91 471…. No website exists, so URL stays blank.' },
+  tip: 'There are two Kovalams: the beach town in Kerala and Kovalam (Covelong) near Chennai — the feed pin was in Tamil Nadu. No website exists, so URL stays blank.' },
 
 { id: 'D1-08', day: 1, q: 8, req: 121553489,
   feed: { name: 'Kumarakom Lake Resort & Ayurveda Spa', street: 'Kumarakom North', postal: '686563', parentText: 'IN, Kumarakom', lat: 9.6176, lng: 76.4278 },
-  listing: { id: 'd302893', name: 'Kumarakom Lake Resort', street: 'Kumarakom North', postal: '686563', parent: 'g2013', type: 'Resort', lat: 9.6176, lng: 76.4278 },
-  ans: { decision: 'alias', reason: 'duplicate', match: 'd302893', name: 'Kumarakom Lake Resort', parent: 'g2013', type: 'Resort', lat: 9.6176, lng: 76.4278 },
+  listing: { id: 'd302893', name: 'Kumarakom Lake Resort', street: 'Kumarakom North', postal: '686563', parent: 'g678552', type: 'Resort', lat: 9.6176, lng: 76.4278 },
+  ans: { decision: 'alias', reason: 'duplicate', match: 'd302893', name: 'Kumarakom Lake Resort', parent: 'g678552', type: 'Resort', lat: 9.6176, lng: 76.4278 },
   tip: 'LMT showed the existing listing (d302893) as a possible match — same resort, same address. Click Add name as alias to apply the request to it, never create a duplicate. Keep the listing name: the feed only added "& Ayurveda Spa", so ✖ that requested change.' },
 
 { id: 'D1-09', day: 1, q: 9, req: 121553502,
   feed: { name: 'Mattancherry Palace Heritage Stay', street: 'Palace Road, Mattancherry', postal: '682002', parentText: 'IN, Kochi', lat: 9.9583, lng: 76.2593 },
-  ans: { decision: 'reject', reason: 'not_accommodation', name: 'Mattancherry Palace', parent: 'g2006', type: '', lat: 9.9583, lng: 76.2593 },
+  ans: { decision: 'reject', reason: 'not_accommodation', name: 'Mattancherry Palace', parent: 'g297633', type: '', lat: 9.9583, lng: 76.2593 },
   tip: 'Mattancherry Palace (the Dutch Palace) is a museum. Nobody can book a room there — a monument is not an accommodation. Reject → Incorrect property type (not an accommodation).' },
 
 { id: 'D1-10', day: 1, q: 10, req: 121553517,
   feed: { name: 'Amberleaf Spice Court', street: 'Rosappookandam Road', postal: '685509', parentText: 'IN, Thekkady', rooms: '22', lat: 9.6080, lng: 77.1660, desc: 'Luxury spice-garden hotel with pool. Best rates guaranteed.' },
-  ans: { decision: 'reject', reason: 'unverifiable', name: 'Amberleaf Spice Court', parent: 'g2004', lat: 9.6080, lng: 77.1660 },
+  ans: { decision: 'reject', reason: 'unverifiable', name: 'Amberleaf Spice Court', parent: 'g7998458', lat: 9.6080, lng: 77.1660 },
   src: { audit: [{ date: '2026-09-30 03:12', who: 'Hopper bulk import', what: 'Request created – 1 of 4,812 records in batch HB-0930' }] },
   tip: 'Google, Google Maps, Tripadvisor, social media and Kerala Tourism show nothing for this name. With zero evidence the property exists, Reject → Cannot verify.' },
 
 /* =========================== DAY 2 — FEED CLEAN-UP =========================== */
 { id: 'D2-01', source: 'https://www.keralatourism.org/homestays/the-haven-munnar/4071', day: 2, q: 1, req: 121560044,
   feed: { name: 'The Haven', street: '10/40 THOKKUPARA JN', postal: '685565', parentText: 'IN, Munnar', lat: 10.0251, lng: 77.0263 },
-  ans: { decision: 'approve', reason: 'new_verified', name: 'The Haven Munnar', street: ['10/40, Thokkupara Junction', '10/40 Thokkupara Junction'], postal: '685565', parent: 'g2001',
+  ans: { decision: 'approve', reason: 'new_verified', name: 'The Haven Munnar', street: ['10/40, Thokkupara Junction', '10/40 Thokkupara Junction'], postal: '685565', parent: 'g303881',
     phone: ['+91 4865 263617', '+91 94000 37623', '+91 83018 83617'], email: ['thehavenmunnar@gmail.com', 'agilehomestay@gmail.com'], url: ['http://www.thehavenmunnar.com', ''], type: 'Guest House', lat: 10.025238, lng: 77.026144 },
   geoTol: 250,
-  tip: 'Here the city IS part of the official name: "The Haven Munnar". Expand "JN" to Junction. A landline written 04865… goes into LMT as +91 4865… (a +91 mobile number is also accepted).' },
+  tip: 'Here the city IS part of the official name: "The Haven Munnar". Expand "JN" to Junction.' },
 
 { id: 'D2-02', source: 'https://www.keralatourism.org/homestays/linn-view-home-stay-munnar/6228', day: 2, q: 2, req: 121560061,
   feed: { name: 'LINN VIEW HOMESTAY', street: 'Mathalipara House', postal: '685612', parentText: 'IN, Munnar', lat: 10.0066, lng: 77.0067 },
-  ans: { decision: 'approve', reason: 'new_verified', name: ['Linn View Home Stay Munnar', 'Linn View Home Stay', 'Linn View Homestay'], street: ['Mathalipara House, Anaviratty', 'Mathalipara House'], postal: '685561', parent: 'g2001',
+  ans: { decision: 'approve', reason: 'new_verified', name: ['Linn View Home Stay Munnar', 'Linn View Home Stay', 'Linn View Homestay'], street: ['Mathalipara House, Anaviratty', 'Mathalipara House'], postal: '685561', parent: 'g303881',
     phone: ['+91 94467 43768', '+91 95447 43767'], email: 'linviewhomestay@gmail.com', url: '', type: 'Guest House', lat: 10.006629, lng: 77.006671 },
   geoTol: 300,
   tip: 'The feed sent Munnar town\'s PIN (685612). The property is in Anaviratty — PIN 685561. Reject wrong feed values with ✖ instead of copying them.' },
 
 { id: 'D2-03', source: 'https://www.keralatourism.org/homestays/hill-mist/6835', day: 2, q: 3, req: 121560078,
   feed: { name: 'Hill Mist Homestay Kumily', street: '1st Mile, Kumily Munnar Rd', postal: '685509', parentText: 'IN, Kumily', lat: 9.6195, lng: 77.1620 },
-  ans: { decision: 'approve', reason: 'new_verified', name: ['Hill Mist', 'Hill Mist Homestay'], street: ['1st Mile, Kumily Munnar Road', '1st Mile Kumily To Munnar Road', 'First Mile, Kumily Munnar Road'], postal: '685509', parent: 'g2004',
+  ans: { decision: 'approve', reason: 'new_verified', name: ['Hill Mist', 'Hill Mist Homestay'], street: ['1st Mile, Kumily Munnar Road', '1st Mile Kumily To Munnar Road', 'First Mile, Kumily Munnar Road'], postal: '685509', parent: ['g7998458', 'g297636'],
     phone: '+91 98465 79205', email: 'hillmist.booking@gmail.com', url: '', type: 'Guest House', lat: 9.619458, lng: 77.162006 },
   geoTol: 200,
   tip: 'Remove the city the feed appended to the name and expand "Rd" to Road. No website exists — leave URL blank.' },
 
 { id: 'D2-04', source: 'https://www.keralatourism.org/homestays/angel-homestay/6758', day: 2, q: 4, req: 121560093,
   feed: { name: 'Angel Homestay', street: 'THEKKUMMURIYIL', postal: '688001', parentText: 'IN, Alleppey', lat: 9.4981, lng: 76.3388 },
-  ans: { decision: 'approve', reason: 'new_verified', name: 'Angel Homestay', street: ['Thekkummuriyil, Punnapra', 'Thekkummuriyil'], street2: ['Punnapra', ''], postal: '688004', parent: 'g2011',
+  ans: { decision: 'approve', reason: 'new_verified', name: 'Angel Homestay', street: ['Thekkummuriyil, Punnapra', 'Thekkummuriyil'], street2: ['Punnapra', ''], postal: '688004', parent: 'g608471',
     phone: '+91 86066 06451', email: ['angelhomestayalpy4@gmail.com', 'bozkojone@gmail.com'], url: '', type: 'Guest House', lat: 9.45074, lng: 76.34122 },
   geoTol: 300,
   tip: 'Wrong PIN in the feed (688001 is Alappuzha town). The homestay is in Punnapra, PIN 688004, about 5 km south.' },
 
 { id: 'D2-05', source: 'https://www.keralatourism.org/homestays/paddy-n-canal-homestay/6764', day: 2, q: 5, req: 121560110,
   feed: { name: 'PADDY & CANAL HOMESTAY', brand: 'OYO', street: 'Near KSRTC Bus Stand', postal: '688011', parentText: 'IN, Alappuzha', lat: 9.4982, lng: 76.3497 },
-  ans: { decision: 'approve', reason: 'new_verified', name: ['Paddy N Canal Homestay', "Paddy 'N' Canal Homestay"], brand: '', street: ['Near KSRTC Bus Stand', 'Near Alleppey KSRTC Bus Stand'], street2: ['East of Alappuzha Fire Station', ''], postal: '688011', parent: 'g2011',
+  ans: { decision: 'approve', reason: 'new_verified', name: ['Paddy N Canal Homestay', "Paddy 'N' Canal Homestay"], brand: '', street: ['Near KSRTC Bus Stand', 'Near Alleppey KSRTC Bus Stand'], street2: ['East of Alappuzha Fire Station', ''], postal: '688011', parent: 'g608471',
     phone: ['+91 62826 44098', '+91 96459 63812'], email: ['paddyncanal@gmail.com', 'robinpsunil2002@gmail.com'], url: '', type: 'Guest House', lat: 9.4982, lng: 76.349674 },
   geoTol: 200,
-  tip: 'The feed claimed an OYO brand — no OYO page lists this homestay, so Brand must stay blank. Write the name the way the property does ("Paddy N Canal"). Mobile numbers go in as +91 and the 10 digits — never with a leading 0.' },
+  tip: 'The feed claimed an OYO brand — no OYO page lists this homestay, so Brand must stay blank. Write the name the way the property does ("Paddy N Canal").' },
 
 { id: 'D2-06', source: 'https://www.keralatourism.org/homestays/illusion-homestay/7271', day: 2, q: 6, req: 121560127,
   feed: { name: 'Illusion Homestay', street: 'West of Janardhana Swamy Temple', postal: '695141', parentText: 'IN, Varkala', lat: 8.7320, lng: 76.7076 },
-  ans: { decision: 'approve', reason: 'new_verified', name: 'Illusion Homestay', street: ['Near Devaswom Campshed, Janardhanapuram', 'Near Devaswom Campshed, West of Janardhana Swamy Temple', 'West of Janardhana Swamy Temple, Janardhanapuram'], postal: '695141', parent: 'g2014',
+  ans: { decision: 'approve', reason: 'new_verified', name: 'Illusion Homestay', street: ['Near Devaswom Campshed, Janardhanapuram', 'Near Devaswom Campshed, West of Janardhana Swamy Temple', 'West of Janardhana Swamy Temple, Janardhanapuram'], postal: '695141', parent: ['g17794977', 'g297639'],
     phone: ['+91 94462 37733', '+91 94460 89494'], email: ['illusion.varkala@gmail.com', 'vijayakumarg1963@gmail.com'], url: '', type: 'Guest House', lat: 8.73197, lng: 76.70764 },
   geoTol: 200,
-  tip: 'The listing shows two phone numbers. The Phone field takes ONE number — enter either one in +91 format.' },
+  tip: 'The listing shows two phone numbers. The Phone field takes ONE number, so enter either one.' },
 
 { id: 'D2-07', source: 'https://www.keralatourism.org/homestays/blue-lagoon-mundro-homestay/8967', day: 2, q: 7, req: 121560143,
   feed: { name: 'Blue Lagoon Munroe Homestay', street: 'Muttom', postal: '691502', parentText: 'IN, Kollam', lat: 8.8932, lng: 76.6141 },
-  ans: { decision: 'approve', reason: 'new_verified', name: ['Blue Lagoon Mundro Homestay', 'Blue Lagoon Munroe Homestay', 'Blue Lagoon Munroe'], street: ['Muttom, East Kallada', 'Muttom'], postal: '691502', parent: 'g2023',
+  ans: { decision: 'approve', reason: 'new_verified', name: ['Blue Lagoon Mundro Homestay', 'Blue Lagoon Munroe Homestay', 'Blue Lagoon Munroe'], street: ['Muttom, East Kallada', 'Muttom'], postal: '691502', parent: 'g12436767',
     phone: '+91 98463 26475', email: 'info@bluelagoonmunroe.com', url: 'https://bluelagoonmunroe.com', type: 'Guest House', lat: 8.992646, lng: 76.643463 },
   geoTol: 300,
   tip: 'The feed pin was in Kollam city, 11 km away. Munroe Island is its own parent geo.' },
 
 { id: 'D2-08', day: 2, q: 8, req: 121560158,
   feed: { name: 'CGH Earth Brunton Boatyard Hotel Fort Kochi', brand: 'CGH Earth', street: 'Calvetty Road', postal: '682001', parentText: 'IN, Kochi', lat: 9.9666, lng: 76.2427 },
-  listing: { id: 'd325218', name: 'Brunton Boatyard - CGH Earth', brand: '', street: 'Calvetty Road', postal: '682001', parent: 'g2006', type: 'Hotel', lat: 9.9666, lng: 76.2427 },
-  ans: { decision: 'alias', reason: 'duplicate', match: 'd325218', name: ['Brunton Boatyard - CGH Earth', 'Brunton Boatyard'], brand: 'CGH Earth', parent: 'g2006', type: 'Hotel', lat: 9.9666, lng: 76.2427 },
+  listing: { id: 'd325218', name: 'Brunton Boatyard - CGH Earth', brand: '', street: 'Calvetty Road', postal: '682001', parent: 'g297633', type: 'Hotel', lat: 9.9666, lng: 76.2427 },
+  ans: { decision: 'alias', reason: 'duplicate', match: 'd325218', name: ['Brunton Boatyard - CGH Earth', 'Brunton Boatyard'], brand: 'CGH Earth', parent: ['g15180821', 'g297633'], type: 'Hotel', lat: 9.9666, lng: 76.2427 },
   tip: 'The possible match is the existing Brunton Boatyard listing (d325218) — same hotel, same street. Add name as alias, then edit: the listing has no Brand, and cghearth.com lists Brunton Boatyard, so accept the requested Brand ➜ CGH Earth. Don\'t copy the padded feed name.' },
 
 { id: 'D2-09', day: 2, q: 9, req: 121560176,
   feed: { name: 'Kathakali Centre Guest Rooms', street: 'K.B. Jacob Road', postal: '682001', parentText: 'IN, Fort Kochi', lat: 9.9658, lng: 76.2421 },
-  ans: { decision: 'reject', reason: 'not_accommodation', name: 'Kerala Kathakali Centre', parent: 'g2006', type: '', lat: 9.9658, lng: 76.2421 },
+  ans: { decision: 'reject', reason: 'not_accommodation', name: 'Kerala Kathakali Centre', parent: 'g15180821', type: '', lat: 9.9658, lng: 76.2421 },
   tip: 'The Kerala Kathakali Centre is a performance and cultural venue (shows, classes). It has no rooms for guests — Reject → Incorrect property type (not an accommodation).' },
 
 { id: 'D2-10', day: 2, q: 10, req: 121560190,
   feed: { name: 'Goldcoast Sapphire Villas', street: 'Cherai Beach Road', postal: '683514', parentText: 'IN, Cherai', lat: 10.1418, lng: 76.1780,
     desc: 'FLAT 50% OFF this week only! Pay 100% advance by UPI to the owner\'s personal ID to confirm. No refunds. Contact on WhatsApp only.' },
-  ans: { decision: 't2', reason: 'fraud', name: 'Goldcoast Sapphire Villas', parent: 'g2032', type: 'Resort', lat: 10.1418, lng: 76.1780 },
+  ans: { decision: 't1', reason: 'weird_case', name: 'Goldcoast Sapphire Villas', parent: 'g2647335', type: 'Resort', lat: 10.1418, lng: 76.1780 },
   src: { votes: [
     { type: 'Scam', comment: 'Paid ₹18,000 advance by UPI, no villa at this address. Number switched off.', user: 'traveller_anu', email: 'an***@mail.com', owner: 'No', date: '2026-09-28' },
     { type: 'Scam', comment: 'Same photos are used by a resort in Goa. Fake listing.', user: 'kochi_explorer', email: 'ko***@mail.com', owner: 'No', date: '2026-10-02' } ] },
-  tip: 'Nothing exists online, AND the request itself carries scam signals: 100% advance to a personal UPI ID, WhatsApp-only contact, scam votes. That is fraud → Tier 2, never a simple Reject. The payment demand sits in the Description, which only appears after you click Show All Fields.' },
+  tip: 'Nothing exists online, AND the request itself carries scam signals: 100% advance to a personal UPI ID, WhatsApp-only contact, scam votes. That is a weird case with scam signals → Escalate, never a simple Reject. The payment demand sits in the Description, which only appears after you click Show All Fields.' },
 
 /* =========================== DAY 3 — PARENTS & GEO TRAPS =========================== */
 { id: 'D3-01', source: 'https://www.keralatourism.org/homestays/signature-homestay/6378', day: 3, q: 1, req: 121571203,
   feed: { name: 'Signature Homestay', street: 'Vayanasaala Rd', postal: '685565', parentText: 'IN, Kunchithanny', lat: 10.0889, lng: 77.0595 },
-  ans: { decision: 'approve', reason: 'new_verified', name: 'Signature Homestay', street: ['Vayanasaala Road, Kunchithanny', 'Vayanasaala Road'], postal: '685565', parent: ['g2001', 'g2003'],
+  ans: { decision: 'approve', reason: 'new_verified', name: 'Signature Homestay', street: ['Vayanasaala Road, Kunchithanny', 'Vayanasaala Road'], postal: '685565', parent: ['g303881', 'g21406257', 'g3404953'],
     phone: '+91 94478 21288', email: 'suryashibu75@gmail.com', url: '', type: 'Guest House', lat: 10.0190964, lng: 77.0628583 },
   geoTol: 300,
-  listing: { id: 'd8812455', name: 'Signature Inn', street: 'Main Road', postal: '673121', parent: 'g2009', type: 'Hotel', lat: 11.6085, lng: 76.0830 },
+  listing: { id: 'd8812455', name: 'Signature Inn', street: 'Main Road', postal: '673121', parent: 'g1232778', type: 'Hotel', lat: 11.6085, lng: 76.0830 },
   tip: 'The possible match "Signature Inn" is a hotel in Kalpetta, Wayanad — similar name, different property. Not match, create new. Kunchithanny isn\'t a parent geo — use the nearest real one (Munnar). The feed pin was in Munnar town, 7.7 km north of the property.' },
 
 { id: 'D3-02', source: 'https://www.keralatourism.org/homestays/greenshore/7757', day: 3, q: 2, req: 121571219,
   feed: { name: 'GREENSHORE VILLA VAGAMON', street: '52A Kalathil', postal: '685505', parentText: 'IN, Vagamon', lat: 9.6862, lng: 76.9058 },
-  ans: { decision: 'approve', reason: 'new_verified', name: ['Greenshore', 'Greenshore Villa'], street: ['52A Kalathil, Valacode', '52A Kalathil'], street2: ['Opposite St George Malankara Church, Valacode', 'Valacode', ''], postal: '685505', parent: 'g2005',
+  ans: { decision: 'approve', reason: 'new_verified', name: ['Greenshore', 'Greenshore Villa'], street: ['52A Kalathil, Valacode', '52A Kalathil'], street2: ['Opposite St George Malankara Church, Valacode', 'Valacode', ''], postal: '685505', parent: 'g2282921',
     phone: '+91 94474 87194', email: ['vagamon@greenshorevilla.com', 'shiju@greenshorevilla.com'], url: 'http://www.greenshorevilla.com', type: 'Guest House', lat: 9.72082, lng: 76.97348 },
   geoTol: 300,
   tip: 'The official site is greenshorevilla.com — enter it with http:// or https://. The pin sat 8 km away in Vagamon town; the property is in Valacode.' },
 
 { id: 'D3-03', source: 'https://www.keralatourism.org/homestays/mangal-caverns-homestay/6752', day: 3, q: 3, req: 121571234,
   feed: { name: 'Mangal Caverns Homestay', street: 'Valacode', postal: '685505', parentText: 'IN, Vagamon', lat: 9.6862, lng: 76.9058 },
-  ans: { decision: 'approve', reason: 'new_verified', name: 'Mangal Caverns Homestay', street: ['Valacode', 'Valacode, Vagamon'], postal: '685505', parent: 'g2005',
+  ans: { decision: 'approve', reason: 'new_verified', name: 'Mangal Caverns Homestay', street: ['Valacode', 'Valacode, Vagamon'], postal: '685505', parent: 'g2282921',
     phone: ['+91 94964 28060', '+91 90744 87880'], email: 'varghesemangalathil@gmail.com', url: '', type: 'Guest House', lat: 9.73092, lng: 76.98665 },
   geoTol: 300,
   tip: 'Same feed pin as the last case — feeds often drop every property on the town centre. Always move the pin to the property.' },
 
 { id: 'D3-04', source: 'https://www.keralatourism.org/homestays/kalariyullathil-homestay/6659', day: 3, q: 4, req: 121571250,
   feed: { name: 'Kalariyullathil Homestay', street: 'Behind BJP Maraar Office, Payyoli-Perambra Road', postal: '673522', parentText: 'IN, Calicut', lat: 11.2588, lng: 75.7804, desc: 'Traditional family homestay near Payyoli. Book online: http://airbnb.com/h/kalariyullathil' },
-  ans: { decision: 'approve', reason: 'new_verified', name: 'Kalariyullathil Homestay', street: ['Payyoli-Perambra Road, Kizhur', 'Behind BJP Maraar Office, Payyoli-Perambra Road', 'Payyoli Perambra Road'], postal: '673522', parent: ['g2022', 'g2021'],
+  ans: { decision: 'approve', reason: 'new_verified', name: 'Kalariyullathil Homestay', street: ['Payyoli-Perambra Road, Kizhur', 'Behind BJP Maraar Office, Payyoli-Perambra Road', 'Payyoli Perambra Road'], postal: '673522', parent: ['g12445206', 'g8405333', 'g297635'],
     phone: '+91 97279 31861', email: ['jeejabai_kp@yahoo.com', 'annajk3@gmail.com'], url: '', type: 'Guest House', lat: 11.523667, lng: 75.638058 },
   geoTol: 300,
-  tip: 'The only link in the Description is Airbnb — that is NOT an official website, so URL stays blank. The feed pin was in Kozhikode city, 33 km from Payyoli.' },
+  tip: 'The only link in the Description is Airbnb — that is NOT an official website, so URL stays blank. The feed pin was in Kozhikode city, 33 km from Payyoli. Payyoli has no geo of its own, so pick the nearest one: Koyilandy or Vadakara.' },
 
 { id: 'D3-05', source: 'https://www.keralatourism.org/homestays/dakshin-ayodhya-homestay/7229', day: 3, q: 5, req: 121571268,
   feed: { name: 'Dakshin Ayodhya Homestay', street: '16/491, Chethikattil', postal: '680571', parentText: 'IN, Trichur', lat: 10.7905, lng: 78.7047 },
-  ans: { decision: 'approve', reason: 'new_verified', name: 'Dakshin Ayodhya Homestay', street: ['16/491, Chethikattil, Velu Amman Padi Junction', '16/491, Chethikattil'], street2: ['Near SNMHS School, Chazhur', 'Chazhur', ''], postal: '680571', parent: 'g2025',
+  ans: { decision: 'approve', reason: 'new_verified', name: 'Dakshin Ayodhya Homestay', street: ['16/491, Chethikattil, Velu Amman Padi Junction', '16/491, Chethikattil'], street2: ['Near SNMHS School, Chazhur', 'Chazhur', ''], postal: '680571', parent: 'g735202',
     phone: ['+91 94959 73070', '+91 94463 72070'], email: ['dakshinayodhya@gmail.com', 'dika.23@gmail.com'], url: '', type: 'Guest House', lat: 10.43693, lng: 76.14976 },
   geoTol: 300,
   tip: '"Trichur" is the old name of Thrissur (Kerala). The feed pin went to Trichy (Tiruchirappalli) in Tamil Nadu — 280 km away.' },
 
 { id: 'D3-06', source: 'https://www.keralatourism.org/homestays/pannadikadu-homestay/7301', day: 3, q: 6, req: 121571281,
   feed: { name: 'Pannadikadu Homestay', street: 'T.House Thumbassery, Chemmanampathy', postal: '678507', parentText: 'IN, Palakkad', lat: 10.7867, lng: 76.6548 },
-  ans: { decision: 'approve', reason: 'new_verified', name: 'Pannadikadu Homestay', street: ['9/312, Thumbassery House, Chemmanampathy', '9/312, T.House Thumbassery, Chemmanampathy', 'Thumbassery, Chemmanampathy'], postal: '678507', parent: ['g2029', 'g2030'],
+  ans: { decision: 'approve', reason: 'new_verified', name: 'Pannadikadu Homestay', street: ['9/312, Thumbassery House, Chemmanampathy', '9/312, T.House Thumbassery, Chemmanampathy', 'Thumbassery, Chemmanampathy'], postal: '678507', parent: ['g28467268', 'g14996779', 'g1096235'],
     phone: ['+91 95392 84669', '+91 4923 294049'], email: ['pannadikadu@gmail.com', 'geothumpassery@gmail.com'], url: 'https://pannadikaduhomestay.com', type: 'Guest House', rooms: 2, lat: 10.560042, lng: 76.829929 },
   geoTol: 300,
   tip: 'The feed pin was in Palakkad town, 30 km away. The homestay is two cottages near Muthalamada — rooms = 2.' },
 
 { id: 'D3-07', day: 3, q: 7, req: 121571297,
   feed: { name: 'Spice Village CGH Earth Kumily', street: 'Thekkady-Kumily Road', postal: '685536', parentText: 'IN, Thekkady', lat: 9.6036, lng: 77.1633 },
-  listing: { id: 'd587399', name: 'Spice Village, CGH Earth', brand: 'CGH Earth', street: 'Thekkady-Kumily Road', postal: '685536', parent: 'g2004', type: 'Hotel', lat: 9.6036, lng: 77.1633 },
-  ans: { decision: 'alias', reason: 'duplicate', match: 'd587399', name: ['Spice Village, CGH Earth', 'Spice Village'], brand: 'CGH Earth', parent: 'g2004', type: 'Resort', lat: 9.6036, lng: 77.1633 },
+  listing: { id: 'd587399', name: 'Spice Village, CGH Earth', brand: 'CGH Earth', street: 'Thekkady-Kumily Road', postal: '685536', parent: 'g7998458', type: 'Hotel', lat: 9.6036, lng: 77.1633 },
+  ans: { decision: 'alias', reason: 'duplicate', match: 'd587399', name: ['Spice Village, CGH Earth', 'Spice Village'], brand: 'CGH Earth', parent: ['g7998458', 'g297636'], type: 'Resort', lat: 9.6036, lng: 77.1633 },
   tip: 'Same property as the existing listing (d587399) → Add name as alias. Then edit as per sources: the listing still says Hotel, but Spice Village is a resort (cottages on large grounds, pool, spa — see the provider amenities and the official site), so change Accommodation Type to Resort.' },
 
 { id: 'D3-08', day: 3, q: 8, req: 121571310,
   feed: { name: 'Napier Museum', street: 'Museum Road', postal: '695033', parentText: 'IN, Trivandrum', lat: 8.5089, lng: 76.9554 },
-  ans: { decision: 'reject', reason: 'not_accommodation', name: 'Napier Museum', parent: 'g2017', type: '', lat: 8.5089, lng: 76.9554 },
+  ans: { decision: 'reject', reason: 'not_accommodation', name: 'Napier Museum', parent: 'g297637', type: '', lat: 8.5089, lng: 76.9554 },
   tip: 'The feed sent a famous museum as a new property. A museum is an attraction, not an accommodation — Reject → Incorrect property type (not an accommodation).' },
 
 { id: 'D3-09', day: 3, q: 9, req: 121571326,
   feed: { name: 'Saltwind Heritage Inn', street: 'Fort Road', postal: '670001', parentText: 'IN, Kannur', rooms: '14', lat: 11.8697, lng: 75.3632 },
-  ans: { decision: 'reject', reason: 'unverifiable', name: 'Saltwind Heritage Inn', parent: 'g2019', lat: 11.8697, lng: 75.3632 },
+  ans: { decision: 'reject', reason: 'unverifiable', name: 'Saltwind Heritage Inn', parent: 'g777115', lat: 11.8697, lng: 75.3632 },
   src: { audit: [{ date: '2026-10-01 02:40', who: 'Hopper bulk import', what: 'Request created – 1 of 2,316 records in batch HB-1001' }] },
   tip: 'No website, no Maps pin, no social pages, no Kerala Tourism entry. Reject → Cannot verify.' },
 
 { id: 'D3-10', day: 3, q: 10, req: 121571342,
   feed: { name: 'Royal Raft Houseboats', street: 'Kavanattinkara Jetty', postal: '686563', parentText: 'IN, Kumarakom', lat: 9.6094, lng: 76.4350,
     desc: 'Luxury houseboats. Book ONLY on WhatsApp. Pay the full amount by GPay before travel — boarding point shared after payment.' },
-  ans: { decision: 't2', reason: 'fraud', name: 'Royal Raft Houseboats', parent: 'g2013', type: 'Specialty Lodging', lat: 9.6094, lng: 76.4350 },
+  ans: { decision: 't1', reason: 'weird_case', name: 'Royal Raft Houseboats', parent: 'g678552', type: 'Specialty Hotel', lat: 9.6094, lng: 76.4350 },
   src: { votes: [{ type: 'Scam', comment: 'Paid in full, never got a boarding point. Blocked on WhatsApp.', user: 'backwater_fan', email: 'ba***@mail.com', owner: 'No', date: '2026-09-21' }],
     owners: [{ name: 'Unknown', status: 'No owner verified', date: '', note: 'Request submitted from a free email address; no business registration supplied.' }] },
-  tip: 'Pay-first with the location revealed only after payment, plus a scam report — classic booking-fraud pattern. Tier 2.' },
+  tip: 'Pay-first with the location revealed only after payment, plus a scam report — classic booking-fraud pattern. Escalate.' },
 
 /* =========================== DAY 4 — INVESTIGATION =========================== */
 { id: 'D4-01', source: 'https://www.keralatourism.org/homestays/kachiprath-homestay/8427', day: 4, q: 1, req: 121584007,
   feed: { name: 'KACHIPRATH HOMESTAY', street: 'Makreri', parentText: 'IN, Kannur', lat: 11.8745, lng: 75.3704 },
-  ans: { decision: 'approve', reason: 'new_verified', name: 'Kachiprath Homestay', street: ['Makreri', 'Makreri, Kannur'], parent: 'g2019',
+  ans: { decision: 'approve', reason: 'new_verified', name: 'Kachiprath Homestay', street: ['Makreri', 'Makreri, Kannur'], parent: 'g777115',
     phone: '+91 95624 45116', email: 'leenakachiprath@gmail.com', url: '', type: 'Guest House', lat: 11.850457, lng: 75.493033 },
   geoTol: 400,
   tip: 'A small rural homestay with very little online — the Kerala Tourism listing and Maps are your main sources. Pin it where the map shows it, 13 km inland from Kannur town.' },
 
 { id: 'D4-02', source: 'https://www.keralatourism.org/homestays/happy-valley-home-stay/8789', day: 4, q: 2, req: 121584023,
   feed: { name: 'Happy Valley Homestay', street: 'Poomangalam', parentText: 'IN, Kannur', lat: 11.8745, lng: 75.3704 },
-  ans: { decision: 'approve', reason: 'new_verified', name: ['Happy Valley Home Stay', 'Happy Valley Homestay'], street: ['Poomangalam', 'Poomangalam, Kannur'], parent: ['g2020', 'g2019'],
+  ans: { decision: 'approve', reason: 'new_verified', name: ['Happy Valley Home Stay', 'Happy Valley Homestay'], street: ['Poomangalam', 'Poomangalam, Kannur'], parent: ['g9734133', 'g777115'],
     phone: '+91 89210 07335', email: 'varunthekkumbad@gmail.com', url: '', type: 'Guest House', lat: 12.058251, lng: 75.400833 },
   geoTol: 400,
   tip: 'The provider page amenities (family home, a few rooms, no front desk) and the Kerala Tourism listing show a registered homestay → Guest House, not a Resort. Poomangalam is near Taliparamba, 20 km north of Kannur town.' },
 
 { id: 'D4-03', source: 'https://www.keralatourism.org/homestays/meadows-kannurs-serene-retreat-homestay/6952', day: 4, q: 3, req: 121584040,
   feed: { name: "Meadows: Kannurs Serene Retreat", street: 'Kannothumchal', postal: '670006', parentText: 'IN, Kannur', lat: 11.8745, lng: 75.3704 },
-  ans: { decision: 'approve', reason: 'new_verified', name: ["Meadows: Kannur's Serene Retreat Homestay", 'Meadows: Kannurs Serene Retreat Homestay', 'Meadows Homestay', 'Meadows'], street: ['Opposite Income Tax Office, Kannothumchal', 'Kannothumchal'], street2: ['Chovva', ''], postal: '670006', parent: 'g2019',
-    phone: '+91 80753 89103', email: 'akmalyasheen@gmail.com', url: '', type: ['Guest House', 'Apartment Hotel'], rooms: 2, lat: 11.873109, lng: 75.391356 },
+  ans: { decision: 'approve', reason: 'new_verified', name: ["Meadows: Kannur's Serene Retreat Homestay", 'Meadows: Kannurs Serene Retreat Homestay', 'Meadows Homestay', 'Meadows'], street: ['Opposite Income Tax Office, Kannothumchal', 'Kannothumchal'], street2: ['Chovva', ''], postal: '670006', parent: 'g777115',
+    phone: '+91 80753 89103', email: 'akmalyasheen@gmail.com', url: '', type: 'Guest House', rooms: 2, lat: 11.873109, lng: 75.391356 },
   geoTol: 250,
   tip: 'A two-bedroom home in Kannothumchal (Chovva) — rooms = 2. Landmarks such as "opposite Income Tax Office" go with the street.' },
 
 { id: 'D4-04', source: 'https://www.keralatourism.org/homestays/spice-garden-residency/6363', day: 4, q: 4, req: 121584056,
   feed: { name: 'Spice Garden Residency', street: 'Vettilappara', postal: '680721', parentText: 'IN, Athirappilly', lat: 10.2850, lng: 76.5694 },
-  ans: { decision: 'approve', reason: 'new_verified', name: 'Spice Garden Residency', street: ['Vettilappara 15, Pariyaram', 'Vettilappara 15', 'Vettilappara'], postal: '680721', parent: 'g2028',
+  ans: { decision: 'approve', reason: 'new_verified', name: 'Spice Garden Residency', street: ['Vettilappara 15, Pariyaram', 'Vettilappara 15', 'Vettilappara'], postal: '680721', parent: 'g2289004',
     phone: '+91 94951 63602', email: 'spicegardenresidency@gmail.com', url: '', type: 'Guest House', lat: 10.291252, lng: 76.506007 },
   geoTol: 300,
   tip: '"Residency" sounds like a hotel, but it is registered as a homestay → Guest House. The feed pin sat at the waterfall, 7 km away.' },
 
 { id: 'D4-05', source: 'https://www.keralatourism.org/homestays/aathira-agri-homes/7136', day: 4, q: 5, req: 121584071,
   feed: { name: 'Aathira Agri Homes', parentText: 'IN, Athirappilly', lat: 10.2850, lng: 76.5694 },
-  ans: { decision: 'approve', reason: 'new_verified', name: ['Aathira Agri-Homes', 'Aathira Agri Homes'], parent: ['g2027', 'g2028'],
-    phone: '+91 94464 04151', email: 'babyranibsnl@gmail.com', url: '', type: ['Guest House', 'Specialty Lodging'], lat: 10.323819, lng: 76.394271 },
+  ans: { decision: 'approve', reason: 'new_verified', name: ['Aathira Agri-Homes', 'Aathira Agri Homes'], parent: ['g1888092', 'g2289004'],
+    phone: '+91 94464 04151', email: 'babyranibsnl@gmail.com', url: '', type: ['Guest House', 'Farmhouse', 'Specialty Hotel'], lat: 10.323819, lng: 76.394271 },
   geoTol: 500,
   tip: 'The listing mentions Athirappilly, but the map shows the farm-stay near Chalakudy, 20 km west. When text and map disagree, trust where the property physically is.' },
 
 { id: 'D4-06', day: 4, q: 6, req: 121584088,
   feed: { name: 'Taj Palace & Tower Colaba', street: 'Apollo Bunder', postal: '400001', parentText: 'IN, Mumbai', lat: 18.9217, lng: 72.8332 },
-  listing: { id: 'd302179', name: 'The Taj Mahal Palace', brand: '', street: 'Apollo Bunder', postal: '400001', parent: 'g2033', type: 'Hotel', lat: 18.9217, lng: 72.8332 },
-  ans: { decision: 'alias', reason: 'duplicate', match: 'd302179', name: 'The Taj Mahal Palace', brand: 'Taj Hotels', parent: 'g2033', type: 'Hotel', lat: 18.9217, lng: 72.8332 },
+  listing: { id: 'd302179', name: 'The Taj Mahal Palace', brand: '', street: 'Apollo Bunder', postal: '400001', parent: 'g304554', type: 'Hotel', lat: 18.9217, lng: 72.8332 },
+  ans: { decision: 'alias', reason: 'duplicate', match: 'd302179', name: 'The Taj Mahal Palace', brand: 'Taj Hotels', parent: 'g304554', type: 'Hotel', lat: 18.9217, lng: 72.8332 },
   tip: 'One of the most famous hotels in India — the possible match (d302179) is it. Add name as alias, keep the listing name (not the feed\'s "Taj Palace & Tower Colaba"), and fix the missing Brand: tajhotels.com lists it → Taj Hotels.' },
 
 { id: 'D4-07', day: 4, q: 7, req: 121584103,
   feed: { name: 'Leopold Cafe & Stay', street: 'Colaba Causeway', postal: '400005', parentText: 'IN, Mumbai', lat: 18.9227, lng: 72.8317 },
-  ans: { decision: 'reject', reason: 'not_accommodation', name: 'Leopold Cafe', parent: 'g2033', type: '', lat: 18.9227, lng: 72.8317 },
+  ans: { decision: 'reject', reason: 'not_accommodation', name: 'Leopold Cafe', parent: 'g304554', type: '', lat: 18.9227, lng: 72.8317 },
   tip: 'Leopold Cafe is a famous restaurant and bar. "& Stay" in the feed doesn\'t make it lodging — there are no guest rooms. Reject → Incorrect property type (not an accommodation).' },
 
 { id: 'D4-08', day: 4, q: 8, req: 121584119,
   feed: { name: 'Cliffnova Suites', street: 'North Cliff', postal: '695141', parentText: 'IN, Varkala', rooms: '18', lat: 8.7379, lng: 76.7163 },
-  ans: { decision: 'reject', reason: 'unverifiable', name: 'Cliffnova Suites', parent: 'g2014', lat: 8.7379, lng: 76.7163 },
+  ans: { decision: 'reject', reason: 'unverifiable', name: 'Cliffnova Suites', parent: 'g17794977', lat: 8.7379, lng: 76.7163 },
   tip: 'Varkala North Cliff is full of real guesthouses, but none with this name — no site, no Maps listing, no socials, no registration. Reject → Cannot verify.' },
 
 { id: 'D4-09', day: 4, q: 9, req: 121584134,
   feed: { name: 'Cloudcrest Resort Ponmudi', street: 'Ponmudi Ghat Road, 22nd Hairpin', parentText: 'IN, Ponmudi', lat: 8.7600, lng: 77.1160 },
-  ans: { decision: 't2', reason: 'safety_legal', name: 'Cloudcrest Resort Ponmudi', parent: 'g2018', type: 'Resort', lat: 8.7600, lng: 77.1160 },
+  ans: { decision: 't1', reason: 'weird_case', name: 'Cloudcrest Resort Ponmudi', parent: 'g1307937', type: 'Resort', lat: 8.7600, lng: 77.1160 },
   src: {
     votes: [{ type: 'Unsafe', comment: 'Retaining wall behind the cottages collapsed in the July rains. Guests were still being booked.', user: 'hillstation_hiker', email: 'hi***@mail.com', owner: 'No', date: '2026-08-02' }],
     owners: [{ name: 'Local resident', status: 'Report', date: '2026-08-10', note: 'Uploaded a panchayat stop-memo: the building has no safety clearance and sits in a notified landslide-risk zone.' }],
     audit: [{ date: '2026-09-18 11:05', who: 'Hopper feed', what: 'Request created' }, { date: '2026-09-20 09:30', who: 'Community', what: 'Safety report attached to request' }] },
-  tip: 'A collapse report and a stop-memo about safety clearance are a safety/legal concern. You never decide those yourself — Tier 2.' },
+  tip: 'A collapse report and a stop-memo about safety clearance are a safety/legal concern. You never decide those yourself — Escalate.' },
 
 { id: 'D4-10', day: 4, q: 10, req: 121584150,
   feed: { name: 'Whispering Canopy Treehouse', street: 'Pookode Lake Road', postal: '673576', parentText: 'IN, Vythiri', lat: 11.5420, lng: 76.0270 },
-  ans: { decision: 't2', reason: 'brand_dispute', name: 'Whispering Canopy Treehouse', parent: 'g2010', type: 'Specialty Lodging', lat: 11.5420, lng: 76.0270 },
+  ans: { decision: 't1', reason: 'weird_case', name: 'Whispering Canopy Treehouse', parent: 'g2295130', type: 'Specialty Hotel', lat: 11.5420, lng: 76.0270 },
   src: { owners: [
     { name: 'A. Thomas', status: 'Verified owner', date: '2025-11-04', note: 'Disputes this request: "It was submitted by our former manager, who no longer has any authority over the property."' },
     { name: 'K. Manoj', status: 'Owner claim pending', date: '2026-09-26', note: 'Claims to be the new operator; no documents uploaded.' } ] },
-  tip: 'Two people claim to control the property and one formally disputes the request. Ownership disputes go to Tier 2.' },
+  tip: 'Two people claim to control the property and one formally disputes the request. Ownership disputes are escalated.' },
 
 /* =========================== DAY 5 — FINAL MIXED MISSION =========================== */
 { id: 'D5-01', source: 'https://www.keralatourism.org/homestays/maliyeckal-homestay/5960', day: 5, q: 1, req: 121597011,
   feed: { name: 'MALIYECKAL HOME STAY', street: 'Anaviratty', postal: '685612', parentText: 'IN, Munnar', lat: 10.0889, lng: 77.0595 },
-  ans: { decision: 'approve', reason: 'new_verified', name: ['Maliyeckal Homestay', 'Maliyeckal Home Stay'], street: ['Anaviratty', 'Anaviratty, Munnar'], postal: '685561', parent: 'g2001',
+  ans: { decision: 'approve', reason: 'new_verified', name: ['Maliyeckal Homestay', 'Maliyeckal Home Stay'], street: ['Anaviratty', 'Anaviratty, Munnar'], postal: '685561', parent: 'g303881',
     phone: '+91 98953 52958', email: 'lejumichael001@gmail.com', url: '', type: 'Guest House', lat: 10.0132323, lng: 77.0004625 },
   geoTol: 400,
   tip: 'Three feed errors at once: ALL CAPS, Munnar town\'s PIN, and a pin 10 km from Anaviratty.' },
 
 { id: 'D5-02', source: 'https://www.keralatourism.org/homestays/evara-residency-homestay/7555', day: 5, q: 2, req: 121597027,
   feed: { name: 'Evara Residency', street: 'Mararikulam South', postal: '688001', parentText: 'IN, Alappuzha', lat: 9.4981, lng: 76.3388 },
-  ans: { decision: 'approve', reason: 'new_verified', name: ['Evara Residency Homestay', 'Evara Residency'], street: ['Mararikulam South', 'Mararikulam South, Alappuzha'], parent: ['g2012', 'g2011'],
+  ans: { decision: 'approve', reason: 'new_verified', name: ['Evara Residency Homestay', 'Evara Residency'], street: ['Mararikulam South', 'Mararikulam South, Alappuzha'], parent: ['g3171875', 'g608471'],
     phone: '+91 79072 82603', email: 'evara2322@gmail.com', url: '', type: 'Guest House', lat: 9.583868, lng: 76.321064 },
   geoTol: 400,
   tip: 'Mararikulam is a beach village 10 km north of Alappuzha town — pick Mararikulam as parent and move the pin. The Kerala Tourism listing shows no PIN, so it isn\'t scored here.' },
 
 { id: 'D5-03', source: 'https://www.keralatourism.org/homestays/nickies-nest-homestay/8246', day: 5, q: 3, req: 121597044,
   feed: { name: 'Nickies Nest', parentText: 'IN, Kollam', lat: 8.8932, lng: 76.6141 },
-  ans: { decision: 'approve', reason: 'new_verified', name: ['Nickies Nest Homestay', "Nickie's Nest Homestay", 'Nickies Nest'], parent: 'g2023',
+  ans: { decision: 'approve', reason: 'new_verified', name: ['Nickies Nest Homestay', "Nickie's Nest Homestay", 'Nickies Nest'], parent: 'g12436767',
     phone: '+91 99956 82897', email: 'nicksmunroe@gmail.com', url: '', type: 'Guest House', lat: 8.998114, lng: 76.619579 },
   geoTol: 400,
   tip: 'Very little data in the feed. Searching the name + "Munroe" finds the Kerala Tourism listing — parent is Munroe Island, not Kollam city.' },
 
 { id: 'D5-04', source: 'https://www.keralatourism.org/homestays/the-nest-homestay/7020', day: 5, q: 4, req: 121597060,
   feed: { name: 'The Nest Kovalam', street: 'GV Raja Road', postal: '695527', parentText: 'Kovalam', lat: 12.7900, lng: 80.2540, desc: 'Cosy homestay a short walk from the beach. Instant booking: https://www.airbnb.com/rooms/1280402564039089747' },
-  ans: { decision: 'approve', reason: 'new_verified', name: ['The Nest Homestay', 'The Nest'], street: ['TC 64/2248 (3), GV Raja Road', 'GV Raja Road'], street2: ['Vellar', ''], postal: '695527', parent: 'g2015',
-    phone: '+91 62820 44427', email: 'bookthenestkovalam1@gmail.com', url: '', type: ['Guest House', 'Apartment Hotel'], lat: 8.403506, lng: 76.975703 },
+  ans: { decision: 'approve', reason: 'new_verified', name: ['The Nest Homestay', 'The Nest'], street: ['TC 64/2248 (3), GV Raja Road', 'GV Raja Road'], street2: ['Vellar', ''], postal: '695527', parent: 'g311295',
+    phone: '+91 62820 44427', email: 'bookthenestkovalam1@gmail.com', url: '', type: 'Guest House', lat: 8.403506, lng: 76.975703 },
   geoTol: 250,
-  listing: { id: 'd7734019', name: 'The Nest Beach House', street: 'North Cliff', postal: '695141', parent: 'g2014', type: 'Guest House', lat: 8.7379, lng: 76.7163 },
+  listing: { id: 'd7734019', name: 'The Nest Beach House', street: 'North Cliff', postal: '695141', parent: 'g17794977', type: 'Guest House', lat: 8.7379, lng: 76.7163 },
   tip: 'The possible match "The Nest Beach House" is on North Cliff, Varkala — about 45 km away, a different property. Not match, create new. Kovalam trap again (the pin was in Tamil Nadu), and the only link in the Description is Airbnb — not an official website, so URL stays blank.' },
 
 { id: 'D5-05', source: 'https://www.keralatourism.org/homestays/brick-house/7103', day: 5, q: 5, req: 121597077,
   feed: { name: 'Brick House', parentText: 'IN, Calicut', lat: 11.2588, lng: 75.7804 },
-  ans: { decision: 'approve', reason: 'new_verified', name: 'Brick House', parent: 'g2021',
+  ans: { decision: 'approve', reason: 'new_verified', name: 'Brick House', parent: 'g297635',
     phone: '+91 70128 67804', email: 'symphony.brickhouse@gmail.com', url: '', type: 'Guest House', lat: 11.2289491, lng: 75.7943301 },
   geoTol: 400,
   tip: 'A very generic name — search it with the city and the word "homestay" (or on keralatourism.org) to find the right property, then take the phone from that listing. A registered homestay → Guest House.' },
 
 { id: 'D5-06', day: 5, q: 6, req: 121597093,
   feed: { name: 'MBS Hotel Tower 1 Singapore', street: '10 Bayfront Avenue', postal: '018956', parentText: 'SG, Singapore', lat: 1.2834, lng: 103.8607 },
-  listing: { id: 'd1770798', name: 'Marina Bay Sands', street: '10 Bayfront Avenue', postal: '018956', parent: 'g2034', type: 'Hotel', lat: 1.2834, lng: 103.8607 },
-  ans: { decision: 'alias', reason: 'duplicate', match: 'd1770798', name: 'Marina Bay Sands', parent: 'g2034', type: ['Hotel', 'Resort'], lat: 1.2834, lng: 103.8607 },
+  listing: { id: 'd1770798', name: 'Marina Bay Sands', street: '10 Bayfront Avenue', postal: '018956', parent: 'g294265', type: 'Hotel', lat: 1.2834, lng: 103.8607 },
+  ans: { decision: 'alias', reason: 'duplicate', match: 'd1770798', name: 'Marina Bay Sands', parent: 'g294265', type: ['Hotel', 'Resort'], lat: 1.2834, lng: 103.8607 },
   tip: '"MBS Hotel Tower 1" is Marina Bay Sands — the possible match (d1770798) has the same address. Add name as alias, never create. Nothing else needs changing: ✖ the feed name so the listing keeps "Marina Bay Sands".' },
 
 { id: 'D5-07', day: 5, q: 7, req: 121597110,
   feed: { name: 'Wonderla Kochi Resort', street: 'Pallikkara', postal: '683565', parentText: 'IN, Kochi', lat: 10.0225, lng: 76.4055 },
-  ans: { decision: 'reject', reason: 'not_accommodation', name: 'Wonderla Kochi', parent: 'g2006', type: '', lat: 10.0225, lng: 76.4055 },
+  ans: { decision: 'reject', reason: 'not_accommodation', name: 'Wonderla Kochi', parent: 'g297633', type: '', lat: 10.0225, lng: 76.4055 },
   tip: 'Wonderla Kochi is an amusement park. (There is a Wonderla resort — but it\'s in Bengaluru, not Kochi.) Check the city before you decide. Reject → Incorrect property type (not an accommodation).' },
 
 { id: 'D5-08', day: 5, q: 8, req: 121597126,
   feed: { name: 'Lanternhouse Grande', street: 'Princess Street', postal: '682001', parentText: 'IN, Fort Kochi', rooms: '26', lat: 9.9660, lng: 76.2425 },
-  ans: { decision: 'reject', reason: 'unverifiable', name: 'Lanternhouse Grande', parent: 'g2006', lat: 9.9660, lng: 76.2425 },
+  ans: { decision: 'reject', reason: 'unverifiable', name: 'Lanternhouse Grande', parent: 'g15180821', lat: 9.9660, lng: 76.2425 },
   tip: 'Princess Street is real and busy, but nothing online matches this name. With no evidence, Reject → Cannot verify.' },
 
 { id: 'D5-09', day: 5, q: 9, req: 121597141,
   feed: { name: 'Tamarindbay Residency', street: 'Beach Road', postal: '673032', parentText: 'IN, Kozhikode', lat: 11.2560, lng: 75.7700 },
-  ans: { decision: 'reject', reason: 'unverifiable', name: 'Tamarindbay Residency', parent: 'g2021', lat: 11.2560, lng: 75.7700 },
-  tip: 'No trace anywhere online. Reject → Cannot verify. (No scam signs, so not Tier 2.)' },
+  ans: { decision: 'reject', reason: 'unverifiable', name: 'Tamarindbay Residency', parent: 'g297635', lat: 11.2560, lng: 75.7700 },
+  tip: 'No trace anywhere online. Reject → Cannot verify. (No scam signs, so no need to escalate.)' },
 
 { id: 'D5-10', day: 5, q: 10, req: 121597158,
   feed: { name: 'Azure Pearl Villas', street: 'Lighthouse Beach', postal: '695527', parentText: 'IN, Kovalam', lat: 8.3832, lng: 76.9790,
     desc: 'Booking confirmed only after payment at securepay-kovalamvillas.example within 2 hours, otherwise cancelled. Card details required.' },
-  ans: { decision: 't2', reason: 'fraud', name: 'Azure Pearl Villas', parent: 'g2015', type: 'Resort', lat: 8.3832, lng: 76.9790 },
+  ans: { decision: 't1', reason: 'weird_case', name: 'Azure Pearl Villas', parent: 'g311295', type: 'Resort', lat: 8.3832, lng: 76.9790 },
   src: { votes: [{ type: 'Scam', comment: 'Payment page stole my card details — two unknown charges the same night.', user: 'sunset_seeker', email: 'su***@mail.com', owner: 'No', date: '2026-10-03' }] },
-  tip: 'A payment link with a 2-hour deadline and a report of stolen card details = phishing. Fraud → Tier 2.' }
+  tip: 'A payment link with a 2-hour deadline and a report of stolen card details = phishing. Escalate.' }
 ];
 
 /* Export for Node tooling (answer-key builder). Ignored in the browser. */
-if (typeof module !== 'undefined') module.exports = { BRANDS, ACCOM_TYPES, AMENITY_PROFILES, PROVIDER_ATTRIBUTIONS, DECISIONS, REASONS, LEGACY_REASONS, GEOS, CASES };
+if (typeof module !== 'undefined') module.exports = { BRANDS, ACCOM_TYPES, LEGACY_TYPES, AMENITY_PROFILES, PROVIDER_ATTRIBUTIONS, DECISIONS, REASONS, LEGACY_REASONS, TA_GEOS, GEOS, LEGACY_GEOS, navGeo, CASES };

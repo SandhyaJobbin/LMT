@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LMT Places Simulator · Sutherland × Tripadvisor</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=2.6">
 </head>
 <body>
 <canvas id="confetti"></canvas>
@@ -145,7 +145,7 @@
     <label><input type="checkbox" id="noEmail">No Email</label>
     <button class="abtn" style="background:#1f7a3a" data-act="approve">✔<span class="tt">Approve – Create New</span></button>
     <button class="abtn" style="background:#d6322b" data-act="reject">⊗<span class="tt">Reject – choose a reason</span></button>
-    <button class="abtn" style="background:#7b4fd6" data-act="escalate">⬆<span class="tt">Escalate (Tier 1 / Tier 2)</span></button>
+    <button class="abtn" style="background:#7b4fd6" data-act="escalate">⬆<span class="tt">Escalate</span></button>
     <button class="abtn" style="background:#2a9fd6" data-act="defer">⏱<span class="tt">Defer – Keep In Progress</span></button>
     <button class="abtn" style="background:#555" data-act="email">✉<span class="tt">Email the property owner</span></button>
   </div>
@@ -167,7 +167,7 @@
 <!-- Map library (optional – the simulator still works without it) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script>if (!window.L) document.write('<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>');</script>
-<script src="data.js"></script>
-<script src="script.js"></script>
+<script src="data.js?v=2.6"></script>
+<script src="script.js?v=2.6"></script>
 </body>
 </html>
