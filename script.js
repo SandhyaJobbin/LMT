@@ -2,7 +2,7 @@
    LMT PLACES SIMULATOR — SETTINGS  (edit this block only)
    ===================================================================== */
 const APP_CONFIG = {
-  VERSION: '2.6',
+  VERSION: '2.7',
 
   // Paste your Google Apps Script URL (ends in /exec) between the quotes so every
   // agent PC saves to the Google Sheet. Leave '' to run offline (browser storage).
@@ -521,7 +521,7 @@ function showGuide() {
 
   <div class="gsec"><h3><span class="n">3</span>Data entry style rules</h3>
     <ul class="rules">
-      <li><b>Name:</b> exactly as the property writes it, in Latin script. No city added unless it is part of the official name. Proper case, not ALL CAPS.</li>
+      <li><b>Name:</b> Name should only be the property's official name as it appears on the official website. No geo added unless it is part of the official name or chain restaurant (restaurant business operates more than one location).</li>
       <li><b>Address:</b> expand abbreviations (St → Street, Rd → Road, HTL → Hotel). Building or floor in Street One, area or landmark in Street Two.</li>
       <li><b>Postal code:</b> only when a source confirms it. Leave blank if no source shows one.</li>
       <li><b>Phone:</b> this is the public or local phone number of the property. The phone number should not be a reservations line or a toll free 1800 number. Leave blank if no source shows one.</li>
@@ -997,7 +997,7 @@ function initMap() {
   const lat = parseFloat(cs.f.lat), lng = parseFloat(cs.f.lng);
   const ok = !isNaN(lat) && !isNaN(lng);
   if (!window.L) {
-    el.innerHTML = `<div class="map-fallback">🗺️<b>Map tiles unavailable (offline or blocked network).</b>Copy the coordinates from Google Maps into the boxes above, then click Apply.</div>`;
+    el.innerHTML = `<div class="map-fallback">🗺️<b>The map could not load on this network.</b>Paste the coordinates from Google Maps into the Latitude / Longitude boxes above. Scoring still works.</div>`;
     return;
   }
   S.map = L.map(el, { worldCopyJump: true, scrollWheelZoom: false, maxZoom: 20 }).setView(ok ? [lat, lng] : [20, 0], ok ? 15 : 2);
@@ -1022,12 +1022,10 @@ function addMapTiles(map, el) {
   const street = idx => {
     const t = list[idx];
     const layer = L.tileLayer(t.url, { subdomains: t.subdomains || 'abc', maxZoom: 20, maxNativeZoom: t.maxNativeZoom || 18, attribution: t.attribution || '' });
-    let loads = 0, errs = 0;
-    layer.on('tileload', () => { loads++; TILE_IDX = idx; const n = el.querySelector('.map-note'); if (n) n.remove(); });
-    layer.on('tileerror', () => {
-      errs++;
-      if (loads || errs < 3 || layer._lmtDead || S.map !== map) return;
-      layer._lmtDead = true;
+    let loads = 0, errs = 0, tm = null;
+    const dead = () => {
+      if (loads || layer._lmtDead || S.map !== map) return;
+      clearTimeout(tm); layer._lmtDead = true;
       const wasOn = map.hasLayer(layer);
       ctl.removeLayer(layer); if (wasOn) map.removeLayer(layer);
       if (idx + 1 < list.length) {
@@ -1036,7 +1034,13 @@ function addMapTiles(map, el) {
         if (wasOn) nx.addTo(map); TILE_IDX = idx + 1;
       }
       else note('🗺️ <b>Map tiles are blocked on this network.</b> The pin still works: paste the coordinates from Google Maps into the Latitude / Longitude boxes.');
-    });
+    };
+    layer.on('tileload', () => { loads++; clearTimeout(tm); TILE_IDX = idx; const n = el.querySelector('.map-note'); if (n) n.remove(); });
+    layer.on('tileerror', () => { errs++; if (!loads && errs >= 3) dead(); });
+    // A firewall that silently drops the connection never fires an error, so also give up on a
+    // server when not a single tile has arrived 8 seconds after it started loading.
+    layer.once('loading', () => { tm = setTimeout(() => { if (!loads && map.hasLayer(layer)) dead(); }, 8000); });
+    map.on('unload', () => clearTimeout(tm));
     return layer;
   };
   if (list.length) { const s = street(Math.min(TILE_IDX, list.length - 1)); s.addTo(map); ctl.addBaseLayer(s, 'Map'); }
@@ -1641,7 +1645,7 @@ function bindGame() {
       cs.aliases.push({ name: v, searchable: !!cs.aliasDraftS }); cs.aliasDraft = ''; cs.aliasDraftS = false; cs.applied.internal = false; rerenderKeepScroll();
     }
     else if (d.cal) { const inp = $('#provExp'); if (!inp) return; inp.type = 'date'; inp.focus(); try { inp.showPicker && inp.showPicker(); } catch (er) { } }
-    else if (t.classList.contains('sec-min')) { const sec = t.closest('.sec'); sec.querySelectorAll('.lrow,table,.votes-search,#map,.geo-inputs').forEach(x => x.classList.toggle('hidden')); t.textContent = t.textContent === '-' ? '+' : '-'; }
+    else if (t.classList.contains('sec-min')) { const sec = t.closest('.sec'); sec.querySelectorAll('.lrow,table,.votes-search,#map,.geo-inputs').forEach(x => x.classList.toggle('hidden')); t.textContent = t.textContent === '-' ? '+' : '-'; if (sec.id === 'sec-geo' && S.map) setTimeout(() => S.map && S.map.invalidateSize(), 50); }
     else if (t.id === 'geoGo') moveMarker();
     else if (t.id === 'geoReset') { cs.f.lat = String(c.feed.lat); cs.f.lng = String(c.feed.lng); $('#geoLat').value = cs.f.lat; $('#geoLng').value = cs.f.lng; cs.applied.geo = false; refreshApplyBtn('geo'); moveMarker(); }
     else if (t.id === 'geoPaste') {
